@@ -1,0 +1,1726 @@
+<!doctype html><html><head><script>/* QR encoder: Kazuhiko Arase, MIT license (d-project.com). Inlined so no CDN is needed. */
+(function(){var M={},C={};function req(n){n=n.replace("./","");if(C[n])return C[n].exports;var m=C[n]={exports:{}};M[n](m,m.exports,req);return m.exports}
+M["QRMode"]=function(module,exports,require){module.exports = {
+    MODE_NUMBER :       1 << 0,
+    MODE_ALPHA_NUM :    1 << 1,
+    MODE_8BIT_BYTE :    1 << 2,
+    MODE_KANJI :        1 << 3
+};
+
+};
+M["QRErrorCorrectLevel"]=function(module,exports,require){module.exports = {
+	L : 1,
+	M : 0,
+	Q : 3,
+	H : 2
+};
+
+};
+M["QRMaskPattern"]=function(module,exports,require){module.exports = {
+	PATTERN000 : 0,
+	PATTERN001 : 1,
+	PATTERN010 : 2,
+	PATTERN011 : 3,
+	PATTERN100 : 4,
+	PATTERN101 : 5,
+	PATTERN110 : 6,
+	PATTERN111 : 7
+};
+
+};
+M["QRMath"]=function(module,exports,require){var QRMath = {
+	glog : function(n) {
+		if (n < 1) {
+			throw new Error("glog(" + n + ")");
+		}
+		return QRMath.LOG_TABLE[n];
+	},
+	gexp : function(n) {
+		while (n < 0) {
+			n += 255;
+		}
+		while (n >= 256) {
+			n -= 255;
+		}
+		return QRMath.EXP_TABLE[n];
+	},
+	EXP_TABLE : new Array(256),
+	LOG_TABLE : new Array(256)
+};
+for (var i = 0; i < 8; i++) {
+	QRMath.EXP_TABLE[i] = 1 << i;
+}
+for (var i = 8; i < 256; i++) {
+	QRMath.EXP_TABLE[i] = QRMath.EXP_TABLE[i - 4]
+		^ QRMath.EXP_TABLE[i - 5]
+		^ QRMath.EXP_TABLE[i - 6]
+		^ QRMath.EXP_TABLE[i - 8];
+}
+for (var i = 0; i < 255; i++) {
+	QRMath.LOG_TABLE[QRMath.EXP_TABLE[i] ] = i;
+}
+module.exports = QRMath;
+
+};
+M["QRPolynomial"]=function(module,exports,require){var QRMath = require('./QRMath');
+function QRPolynomial(num, shift) {
+	if (num.length === undefined) {
+		throw new Error(num.length + "/" + shift);
+	}
+	var offset = 0;
+	while (offset < num.length && num[offset] === 0) {
+		offset++;
+	}
+	this.num = new Array(num.length - offset + shift);
+	for (var i = 0; i < num.length - offset; i++) {
+		this.num[i] = num[i + offset];
+	}
+}
+QRPolynomial.prototype = {
+	get : function(index) {
+		return this.num[index];
+	},
+	getLength : function() {
+		return this.num.length;
+	},
+	multiply : function(e) {
+		var num = new Array(this.getLength() + e.getLength() - 1);
+		for (var i = 0; i < this.getLength(); i++) {
+			for (var j = 0; j < e.getLength(); j++) {
+				num[i + j] ^= QRMath.gexp(QRMath.glog(this.get(i) ) + QRMath.glog(e.get(j) ) );
+			}
+		}
+		return new QRPolynomial(num, 0);
+	},
+	mod : function(e) {
+		if (this.getLength() - e.getLength() < 0) {
+			return this;
+		}
+		var ratio = QRMath.glog(this.get(0) ) - QRMath.glog(e.get(0) );
+		var num = new Array(this.getLength() );
+		for (var i = 0; i < this.getLength(); i++) {
+			num[i] = this.get(i);
+		}
+		for (var x = 0; x < e.getLength(); x++) {
+			num[x] ^= QRMath.gexp(QRMath.glog(e.get(x) ) + ratio);
+		}
+		return new QRPolynomial(num, 0).mod(e);
+	}
+};
+module.exports = QRPolynomial;
+
+};
+M["QRRSBlock"]=function(module,exports,require){var QRErrorCorrectLevel = require('./QRErrorCorrectLevel');
+function QRRSBlock(totalCount, dataCount) {
+	this.totalCount = totalCount;
+	this.dataCount  = dataCount;
+}
+QRRSBlock.RS_BLOCK_TABLE = [
+	[1, 26, 19],
+	[1, 26, 16],
+	[1, 26, 13],
+	[1, 26, 9],
+	[1, 44, 34],
+	[1, 44, 28],
+	[1, 44, 22],
+	[1, 44, 16],
+	[1, 70, 55],
+	[1, 70, 44],
+	[2, 35, 17],
+	[2, 35, 13],
+	[1, 100, 80],
+	[2, 50, 32],
+	[2, 50, 24],
+	[4, 25, 9],
+	[1, 134, 108],
+	[2, 67, 43],
+	[2, 33, 15, 2, 34, 16],
+	[2, 33, 11, 2, 34, 12],
+	[2, 86, 68],
+	[4, 43, 27],
+	[4, 43, 19],
+	[4, 43, 15],
+	[2, 98, 78],
+	[4, 49, 31],
+	[2, 32, 14, 4, 33, 15],
+	[4, 39, 13, 1, 40, 14],
+	[2, 121, 97],
+	[2, 60, 38, 2, 61, 39],
+	[4, 40, 18, 2, 41, 19],
+	[4, 40, 14, 2, 41, 15],
+	[2, 146, 116],
+	[3, 58, 36, 2, 59, 37],
+	[4, 36, 16, 4, 37, 17],
+	[4, 36, 12, 4, 37, 13],
+	[2, 86, 68, 2, 87, 69],
+	[4, 69, 43, 1, 70, 44],
+	[6, 43, 19, 2, 44, 20],
+	[6, 43, 15, 2, 44, 16],
+	[4, 101, 81],
+	[1, 80, 50, 4, 81, 51],
+	[4, 50, 22, 4, 51, 23],
+	[3, 36, 12, 8, 37, 13],
+	[2, 116, 92, 2, 117, 93],
+	[6, 58, 36, 2, 59, 37],
+	[4, 46, 20, 6, 47, 21],
+	[7, 42, 14, 4, 43, 15],
+	[4, 133, 107],
+	[8, 59, 37, 1, 60, 38],
+	[8, 44, 20, 4, 45, 21],
+	[12, 33, 11, 4, 34, 12],
+	[3, 145, 115, 1, 146, 116],
+	[4, 64, 40, 5, 65, 41],
+	[11, 36, 16, 5, 37, 17],
+	[11, 36, 12, 5, 37, 13],
+	[5, 109, 87, 1, 110, 88],
+	[5, 65, 41, 5, 66, 42],
+	[5, 54, 24, 7, 55, 25],
+	[11, 36, 12],
+	[5, 122, 98, 1, 123, 99],
+	[7, 73, 45, 3, 74, 46],
+	[15, 43, 19, 2, 44, 20],
+	[3, 45, 15, 13, 46, 16],
+	[1, 135, 107, 5, 136, 108],
+	[10, 74, 46, 1, 75, 47],
+	[1, 50, 22, 15, 51, 23],
+	[2, 42, 14, 17, 43, 15],
+	[5, 150, 120, 1, 151, 121],
+	[9, 69, 43, 4, 70, 44],
+	[17, 50, 22, 1, 51, 23],
+	[2, 42, 14, 19, 43, 15],
+	[3, 141, 113, 4, 142, 114],
+	[3, 70, 44, 11, 71, 45],
+	[17, 47, 21, 4, 48, 22],
+	[9, 39, 13, 16, 40, 14],
+	[3, 135, 107, 5, 136, 108],
+	[3, 67, 41, 13, 68, 42],
+	[15, 54, 24, 5, 55, 25],
+	[15, 43, 15, 10, 44, 16],
+	[4, 144, 116, 4, 145, 117],
+	[17, 68, 42],
+	[17, 50, 22, 6, 51, 23],
+	[19, 46, 16, 6, 47, 17],
+	[2, 139, 111, 7, 140, 112],
+	[17, 74, 46],
+	[7, 54, 24, 16, 55, 25],
+	[34, 37, 13],
+	[4, 151, 121, 5, 152, 122],
+	[4, 75, 47, 14, 76, 48],
+	[11, 54, 24, 14, 55, 25],
+	[16, 45, 15, 14, 46, 16],
+	[6, 147, 117, 4, 148, 118],
+	[6, 73, 45, 14, 74, 46],
+	[11, 54, 24, 16, 55, 25],
+	[30, 46, 16, 2, 47, 17],
+	[8, 132, 106, 4, 133, 107],
+	[8, 75, 47, 13, 76, 48],
+	[7, 54, 24, 22, 55, 25],
+	[22, 45, 15, 13, 46, 16],
+	[10, 142, 114, 2, 143, 115],
+	[19, 74, 46, 4, 75, 47],
+	[28, 50, 22, 6, 51, 23],
+	[33, 46, 16, 4, 47, 17],
+	[8, 152, 122, 4, 153, 123],
+	[22, 73, 45, 3, 74, 46],
+	[8, 53, 23, 26, 54, 24],
+	[12, 45, 15, 28, 46, 16],
+	[3, 147, 117, 10, 148, 118],
+	[3, 73, 45, 23, 74, 46],
+	[4, 54, 24, 31, 55, 25],
+	[11, 45, 15, 31, 46, 16],
+	[7, 146, 116, 7, 147, 117],
+	[21, 73, 45, 7, 74, 46],
+	[1, 53, 23, 37, 54, 24],
+	[19, 45, 15, 26, 46, 16],
+	[5, 145, 115, 10, 146, 116],
+	[19, 75, 47, 10, 76, 48],
+	[15, 54, 24, 25, 55, 25],
+	[23, 45, 15, 25, 46, 16],
+	[13, 145, 115, 3, 146, 116],
+	[2, 74, 46, 29, 75, 47],
+	[42, 54, 24, 1, 55, 25],
+	[23, 45, 15, 28, 46, 16],
+	[17, 145, 115],
+	[10, 74, 46, 23, 75, 47],
+	[10, 54, 24, 35, 55, 25],
+	[19, 45, 15, 35, 46, 16],
+	[17, 145, 115, 1, 146, 116],
+	[14, 74, 46, 21, 75, 47],
+	[29, 54, 24, 19, 55, 25],
+	[11, 45, 15, 46, 46, 16],
+	[13, 145, 115, 6, 146, 116],
+	[14, 74, 46, 23, 75, 47],
+	[44, 54, 24, 7, 55, 25],
+	[59, 46, 16, 1, 47, 17],
+	[12, 151, 121, 7, 152, 122],
+	[12, 75, 47, 26, 76, 48],
+	[39, 54, 24, 14, 55, 25],
+	[22, 45, 15, 41, 46, 16],
+	[6, 151, 121, 14, 152, 122],
+	[6, 75, 47, 34, 76, 48],
+	[46, 54, 24, 10, 55, 25],
+	[2, 45, 15, 64, 46, 16],
+	[17, 152, 122, 4, 153, 123],
+	[29, 74, 46, 14, 75, 47],
+	[49, 54, 24, 10, 55, 25],
+	[24, 45, 15, 46, 46, 16],
+	[4, 152, 122, 18, 153, 123],
+	[13, 74, 46, 32, 75, 47],
+	[48, 54, 24, 14, 55, 25],
+	[42, 45, 15, 32, 46, 16],
+	[20, 147, 117, 4, 148, 118],
+	[40, 75, 47, 7, 76, 48],
+	[43, 54, 24, 22, 55, 25],
+	[10, 45, 15, 67, 46, 16],
+	[19, 148, 118, 6, 149, 119],
+	[18, 75, 47, 31, 76, 48],
+	[34, 54, 24, 34, 55, 25],
+	[20, 45, 15, 61, 46, 16]
+];
+QRRSBlock.getRSBlocks = function(typeNumber, errorCorrectLevel) {
+	var rsBlock = QRRSBlock.getRsBlockTable(typeNumber, errorCorrectLevel);
+	if (rsBlock === undefined) {
+		throw new Error("bad rs block @ typeNumber:" + typeNumber + "/errorCorrectLevel:" + errorCorrectLevel);
+	}
+	var length = rsBlock.length / 3;
+	var list = [];
+	for (var i = 0; i < length; i++) {
+		var count = rsBlock[i * 3 + 0];
+		var totalCount = rsBlock[i * 3 + 1];
+		var dataCount  = rsBlock[i * 3 + 2];
+		for (var j = 0; j < count; j++) {
+			list.push(new QRRSBlock(totalCount, dataCount) );	
+		}
+	}
+	return list;
+};
+QRRSBlock.getRsBlockTable = function(typeNumber, errorCorrectLevel) {
+	switch(errorCorrectLevel) {
+	case QRErrorCorrectLevel.L :
+		return QRRSBlock.RS_BLOCK_TABLE[(typeNumber - 1) * 4 + 0];
+	case QRErrorCorrectLevel.M :
+		return QRRSBlock.RS_BLOCK_TABLE[(typeNumber - 1) * 4 + 1];
+	case QRErrorCorrectLevel.Q :
+		return QRRSBlock.RS_BLOCK_TABLE[(typeNumber - 1) * 4 + 2];
+	case QRErrorCorrectLevel.H :
+		return QRRSBlock.RS_BLOCK_TABLE[(typeNumber - 1) * 4 + 3];
+	default :
+		return undefined;
+	}
+};
+module.exports = QRRSBlock;
+
+};
+M["QRBitBuffer"]=function(module,exports,require){function QRBitBuffer() {
+	this.buffer = [];
+	this.length = 0;
+}
+QRBitBuffer.prototype = {
+	get : function(index) {
+		var bufIndex = Math.floor(index / 8);
+		return ( (this.buffer[bufIndex] >>> (7 - index % 8) ) & 1) == 1;
+	},
+	put : function(num, length) {
+		for (var i = 0; i < length; i++) {
+			this.putBit( ( (num >>> (length - i - 1) ) & 1) == 1);
+		}
+	},
+	getLengthInBits : function() {
+		return this.length;
+	},
+	putBit : function(bit) {
+		var bufIndex = Math.floor(this.length / 8);
+		if (this.buffer.length <= bufIndex) {
+			this.buffer.push(0);
+		}
+		if (bit) {
+			this.buffer[bufIndex] |= (0x80 >>> (this.length % 8) );
+		}
+		this.length++;
+	}
+};
+module.exports = QRBitBuffer;
+
+};
+M["QRUtil"]=function(module,exports,require){var QRMode = require('./QRMode');
+var QRPolynomial = require('./QRPolynomial');
+var QRMath = require('./QRMath');
+var QRMaskPattern = require('./QRMaskPattern');
+var QRUtil = {
+    PATTERN_POSITION_TABLE : [
+        [],
+        [6, 18],
+        [6, 22],
+        [6, 26],
+        [6, 30],
+        [6, 34],
+        [6, 22, 38],
+        [6, 24, 42],
+        [6, 26, 46],
+        [6, 28, 50],
+        [6, 30, 54],        
+        [6, 32, 58],
+        [6, 34, 62],
+        [6, 26, 46, 66],
+        [6, 26, 48, 70],
+        [6, 26, 50, 74],
+        [6, 30, 54, 78],
+        [6, 30, 56, 82],
+        [6, 30, 58, 86],
+        [6, 34, 62, 90],
+        [6, 28, 50, 72, 94],
+        [6, 26, 50, 74, 98],
+        [6, 30, 54, 78, 102],
+        [6, 28, 54, 80, 106],
+        [6, 32, 58, 84, 110],
+        [6, 30, 58, 86, 114],
+        [6, 34, 62, 90, 118],
+        [6, 26, 50, 74, 98, 122],
+        [6, 30, 54, 78, 102, 126],
+        [6, 26, 52, 78, 104, 130],
+        [6, 30, 56, 82, 108, 134],
+        [6, 34, 60, 86, 112, 138],
+        [6, 30, 58, 86, 114, 142],
+        [6, 34, 62, 90, 118, 146],
+        [6, 30, 54, 78, 102, 126, 150],
+        [6, 24, 50, 76, 102, 128, 154],
+        [6, 28, 54, 80, 106, 132, 158],
+        [6, 32, 58, 84, 110, 136, 162],
+        [6, 26, 54, 82, 110, 138, 166],
+        [6, 30, 58, 86, 114, 142, 170]
+    ],
+    G15 : (1 << 10) | (1 << 8) | (1 << 5) | (1 << 4) | (1 << 2) | (1 << 1) | (1 << 0),
+    G18 : (1 << 12) | (1 << 11) | (1 << 10) | (1 << 9) | (1 << 8) | (1 << 5) | (1 << 2) | (1 << 0),
+    G15_MASK : (1 << 14) | (1 << 12) | (1 << 10)    | (1 << 4) | (1 << 1),
+    getBCHTypeInfo : function(data) {
+        var d = data << 10;
+        while (QRUtil.getBCHDigit(d) - QRUtil.getBCHDigit(QRUtil.G15) >= 0) {
+            d ^= (QRUtil.G15 << (QRUtil.getBCHDigit(d) - QRUtil.getBCHDigit(QRUtil.G15) ) );    
+        }
+        return ( (data << 10) | d) ^ QRUtil.G15_MASK;
+    },
+    getBCHTypeNumber : function(data) {
+        var d = data << 12;
+        while (QRUtil.getBCHDigit(d) - QRUtil.getBCHDigit(QRUtil.G18) >= 0) {
+            d ^= (QRUtil.G18 << (QRUtil.getBCHDigit(d) - QRUtil.getBCHDigit(QRUtil.G18) ) );    
+        }
+        return (data << 12) | d;
+    },
+    getBCHDigit : function(data) {
+        var digit = 0;
+        while (data !== 0) {
+            digit++;
+            data >>>= 1;
+        }
+        return digit;
+    },
+    getPatternPosition : function(typeNumber) {
+        return QRUtil.PATTERN_POSITION_TABLE[typeNumber - 1];
+    },
+    getMask : function(maskPattern, i, j) {
+        switch (maskPattern) {
+        case QRMaskPattern.PATTERN000 : return (i + j) % 2 === 0;
+        case QRMaskPattern.PATTERN001 : return i % 2 === 0;
+        case QRMaskPattern.PATTERN010 : return j % 3 === 0;
+        case QRMaskPattern.PATTERN011 : return (i + j) % 3 === 0;
+        case QRMaskPattern.PATTERN100 : return (Math.floor(i / 2) + Math.floor(j / 3) ) % 2 === 0;
+        case QRMaskPattern.PATTERN101 : return (i * j) % 2 + (i * j) % 3 === 0;
+        case QRMaskPattern.PATTERN110 : return ( (i * j) % 2 + (i * j) % 3) % 2 === 0;
+        case QRMaskPattern.PATTERN111 : return ( (i * j) % 3 + (i + j) % 2) % 2 === 0;
+        default :
+            throw new Error("bad maskPattern:" + maskPattern);
+        }
+    },
+    getErrorCorrectPolynomial : function(errorCorrectLength) {
+        var a = new QRPolynomial([1], 0);
+        for (var i = 0; i < errorCorrectLength; i++) {
+            a = a.multiply(new QRPolynomial([1, QRMath.gexp(i)], 0) );
+        }
+        return a;
+    },
+    getLengthInBits : function(mode, type) {
+        if (1 <= type && type < 10) {
+            switch(mode) {
+            case QRMode.MODE_NUMBER     : return 10;
+            case QRMode.MODE_ALPHA_NUM  : return 9;
+            case QRMode.MODE_8BIT_BYTE  : return 8;
+            case QRMode.MODE_KANJI      : return 8;
+            default :
+                throw new Error("mode:" + mode);
+            }
+        } else if (type < 27) {
+            switch(mode) {
+            case QRMode.MODE_NUMBER     : return 12;
+            case QRMode.MODE_ALPHA_NUM  : return 11;
+            case QRMode.MODE_8BIT_BYTE  : return 16;
+            case QRMode.MODE_KANJI      : return 10;
+            default :
+                throw new Error("mode:" + mode);
+            }
+        } else if (type < 41) {
+            switch(mode) {
+            case QRMode.MODE_NUMBER     : return 14;
+            case QRMode.MODE_ALPHA_NUM  : return 13;
+            case QRMode.MODE_8BIT_BYTE  : return 16;
+            case QRMode.MODE_KANJI      : return 12;
+            default :
+                throw new Error("mode:" + mode);
+            }
+        } else {
+            throw new Error("type:" + type);
+        }
+    },
+    getLostPoint : function(qrCode) {
+        var moduleCount = qrCode.getModuleCount();
+        var lostPoint = 0;
+        var row = 0; 
+        var col = 0;
+        for (row = 0; row < moduleCount; row++) {
+            for (col = 0; col < moduleCount; col++) {
+                var sameCount = 0;
+                var dark = qrCode.isDark(row, col);
+                for (var r = -1; r <= 1; r++) {
+                    if (row + r < 0 || moduleCount <= row + r) {
+                        continue;
+                    }
+                    for (var c = -1; c <= 1; c++) {
+                        if (col + c < 0 || moduleCount <= col + c) {
+                            continue;
+                        }
+                        if (r === 0 && c === 0) {
+                            continue;
+                        }
+                        if (dark === qrCode.isDark(row + r, col + c) ) {
+                            sameCount++;
+                        }
+                    }
+                }
+                if (sameCount > 5) {
+                    lostPoint += (3 + sameCount - 5);
+                }
+            }
+        }
+        for (row = 0; row < moduleCount - 1; row++) {
+            for (col = 0; col < moduleCount - 1; col++) {
+                var count = 0;
+                if (qrCode.isDark(row,     col    ) ) count++;
+                if (qrCode.isDark(row + 1, col    ) ) count++;
+                if (qrCode.isDark(row,     col + 1) ) count++;
+                if (qrCode.isDark(row + 1, col + 1) ) count++;
+                if (count === 0 || count === 4) {
+                    lostPoint += 3;
+                }
+            }
+        }
+        for (row = 0; row < moduleCount; row++) {
+            for (col = 0; col < moduleCount - 6; col++) {
+                if (qrCode.isDark(row, col) && 
+                        !qrCode.isDark(row, col + 1) && 
+                         qrCode.isDark(row, col + 2) && 
+                         qrCode.isDark(row, col + 3) && 
+                         qrCode.isDark(row, col + 4) && 
+                        !qrCode.isDark(row, col + 5) && 
+                         qrCode.isDark(row, col + 6) ) {
+                    lostPoint += 40;
+                }
+            }
+        }
+        for (col = 0; col < moduleCount; col++) {
+            for (row = 0; row < moduleCount - 6; row++) {
+                if (qrCode.isDark(row, col) &&
+                        !qrCode.isDark(row + 1, col) &&
+                         qrCode.isDark(row + 2, col) &&
+                         qrCode.isDark(row + 3, col) &&
+                         qrCode.isDark(row + 4, col) &&
+                        !qrCode.isDark(row + 5, col) &&
+                         qrCode.isDark(row + 6, col) ) {
+                    lostPoint += 40;
+                }
+            }
+        }
+        var darkCount = 0;
+        for (col = 0; col < moduleCount; col++) {
+            for (row = 0; row < moduleCount; row++) {
+                if (qrCode.isDark(row, col) ) {
+                    darkCount++;
+                }
+            }
+        }
+        var ratio = Math.abs(100 * darkCount / moduleCount / moduleCount - 50) / 5;
+        lostPoint += ratio * 10;
+        return lostPoint;       
+    }
+};
+module.exports = QRUtil;
+
+};
+M["QR8bitByte"]=function(module,exports,require){var QRMode = require('./QRMode');
+function QR8bitByte(data) {
+	this.mode = QRMode.MODE_8BIT_BYTE;
+	this.data = data;
+}
+QR8bitByte.prototype = {
+	getLength : function() {
+		return this.data.length;
+	},
+	write : function(buffer) {
+		for (var i = 0; i < this.data.length; i++) {
+			buffer.put(this.data.charCodeAt(i), 8);
+		}
+	}
+};
+module.exports = QR8bitByte;
+
+};
+M["index"]=function(module,exports,require){
+var QR8bitByte = require('./QR8bitByte');
+var QRUtil = require('./QRUtil');
+var QRPolynomial = require('./QRPolynomial');
+var QRRSBlock = require('./QRRSBlock');
+var QRBitBuffer = require('./QRBitBuffer');
+function QRCode(typeNumber, errorCorrectLevel) {
+	this.typeNumber = typeNumber;
+	this.errorCorrectLevel = errorCorrectLevel;
+	this.modules = null;
+	this.moduleCount = 0;
+	this.dataCache = null;
+	this.dataList = [];
+}
+QRCode.prototype = {
+	addData : function(data) {
+		var newData = new QR8bitByte(data);
+		this.dataList.push(newData);
+		this.dataCache = null;
+	},
+	isDark : function(row, col) {
+		if (row < 0 || this.moduleCount <= row || col < 0 || this.moduleCount <= col) {
+			throw new Error(row + "," + col);
+		}
+		return this.modules[row][col];
+	},
+	getModuleCount : function() {
+		return this.moduleCount;
+	},
+	make : function() {
+		if (this.typeNumber < 1 ){
+			var typeNumber = 1;
+			for (typeNumber = 1; typeNumber < 40; typeNumber++) {
+				var rsBlocks = QRRSBlock.getRSBlocks(typeNumber, this.errorCorrectLevel);
+				var buffer = new QRBitBuffer();
+				var totalDataCount = 0;
+				for (var i = 0; i < rsBlocks.length; i++) {
+					totalDataCount += rsBlocks[i].dataCount;
+				}
+				for (var x = 0; x < this.dataList.length; x++) {
+					var data = this.dataList[x];
+					buffer.put(data.mode, 4);
+					buffer.put(data.getLength(), QRUtil.getLengthInBits(data.mode, typeNumber) );
+					data.write(buffer);
+				}
+				if (buffer.getLengthInBits() <= totalDataCount * 8)
+					break;
+			}
+			this.typeNumber = typeNumber;
+		}
+		this.makeImpl(false, this.getBestMaskPattern() );
+	},
+	makeImpl : function(test, maskPattern) {
+		this.moduleCount = this.typeNumber * 4 + 17;
+		this.modules = new Array(this.moduleCount);
+		for (var row = 0; row < this.moduleCount; row++) {
+			this.modules[row] = new Array(this.moduleCount);
+			for (var col = 0; col < this.moduleCount; col++) {
+				this.modules[row][col] = null;
+			}
+		}
+		this.setupPositionProbePattern(0, 0);
+		this.setupPositionProbePattern(this.moduleCount - 7, 0);
+		this.setupPositionProbePattern(0, this.moduleCount - 7);
+		this.setupPositionAdjustPattern();
+		this.setupTimingPattern();
+		this.setupTypeInfo(test, maskPattern);
+		if (this.typeNumber >= 7) {
+			this.setupTypeNumber(test);
+		}
+		if (this.dataCache === null) {
+			this.dataCache = QRCode.createData(this.typeNumber, this.errorCorrectLevel, this.dataList);
+		}
+		this.mapData(this.dataCache, maskPattern);
+	},
+	setupPositionProbePattern : function(row, col)  {
+		for (var r = -1; r <= 7; r++) {
+			if (row + r <= -1 || this.moduleCount <= row + r) continue;
+			for (var c = -1; c <= 7; c++) {
+				if (col + c <= -1 || this.moduleCount <= col + c) continue;
+				if ( (0 <= r && r <= 6 && (c === 0 || c === 6) ) || 
+                     (0 <= c && c <= 6 && (r === 0 || r === 6) ) || 
+                     (2 <= r && r <= 4 && 2 <= c && c <= 4) ) {
+					this.modules[row + r][col + c] = true;
+				} else {
+					this.modules[row + r][col + c] = false;
+				}
+			}		
+		}		
+	},
+	getBestMaskPattern : function() {
+		var minLostPoint = 0;
+		var pattern = 0;
+		for (var i = 0; i < 8; i++) {
+			this.makeImpl(true, i);
+			var lostPoint = QRUtil.getLostPoint(this);
+			if (i === 0 || minLostPoint >  lostPoint) {
+				minLostPoint = lostPoint;
+				pattern = i;
+			}
+		}
+		return pattern;
+	},
+	createMovieClip : function(target_mc, instance_name, depth) {
+		var qr_mc = target_mc.createEmptyMovieClip(instance_name, depth);
+		var cs = 1;
+		this.make();
+		for (var row = 0; row < this.modules.length; row++) {
+			var y = row * cs;
+			for (var col = 0; col < this.modules[row].length; col++) {
+				var x = col * cs;
+				var dark = this.modules[row][col];
+				if (dark) {
+					qr_mc.beginFill(0, 100);
+					qr_mc.moveTo(x, y);
+					qr_mc.lineTo(x + cs, y);
+					qr_mc.lineTo(x + cs, y + cs);
+					qr_mc.lineTo(x, y + cs);
+					qr_mc.endFill();
+				}
+			}
+		}
+		return qr_mc;
+	},
+	setupTimingPattern : function() {
+		for (var r = 8; r < this.moduleCount - 8; r++) {
+			if (this.modules[r][6] !== null) {
+				continue;
+			}
+			this.modules[r][6] = (r % 2 === 0);
+		}
+		for (var c = 8; c < this.moduleCount - 8; c++) {
+			if (this.modules[6][c] !== null) {
+				continue;
+			}
+			this.modules[6][c] = (c % 2 === 0);
+		}
+	},
+	setupPositionAdjustPattern : function() {
+		var pos = QRUtil.getPatternPosition(this.typeNumber);
+		for (var i = 0; i < pos.length; i++) {
+			for (var j = 0; j < pos.length; j++) {
+				var row = pos[i];
+				var col = pos[j];
+				if (this.modules[row][col] !== null) {
+					continue;
+				}
+				for (var r = -2; r <= 2; r++) {
+					for (var c = -2; c <= 2; c++) {
+						if (Math.abs(r) === 2 || 
+                            Math.abs(c) === 2 ||
+                            (r === 0 && c === 0) ) {
+							this.modules[row + r][col + c] = true;
+						} else {
+							this.modules[row + r][col + c] = false;
+						}
+					}
+				}
+			}
+		}
+	},
+	setupTypeNumber : function(test) {
+		var bits = QRUtil.getBCHTypeNumber(this.typeNumber);
+        var mod;
+		for (var i = 0; i < 18; i++) {
+			mod = (!test && ( (bits >> i) & 1) === 1);
+			this.modules[Math.floor(i / 3)][i % 3 + this.moduleCount - 8 - 3] = mod;
+		}
+		for (var x = 0; x < 18; x++) {
+			mod = (!test && ( (bits >> x) & 1) === 1);
+			this.modules[x % 3 + this.moduleCount - 8 - 3][Math.floor(x / 3)] = mod;
+		}
+	},
+	setupTypeInfo : function(test, maskPattern) {
+		var data = (this.errorCorrectLevel << 3) | maskPattern;
+		var bits = QRUtil.getBCHTypeInfo(data);
+        var mod;
+		for (var v = 0; v < 15; v++) {
+			mod = (!test && ( (bits >> v) & 1) === 1);
+			if (v < 6) {
+				this.modules[v][8] = mod;
+			} else if (v < 8) {
+				this.modules[v + 1][8] = mod;
+			} else {
+				this.modules[this.moduleCount - 15 + v][8] = mod;
+			}
+		}
+		for (var h = 0; h < 15; h++) {
+			mod = (!test && ( (bits >> h) & 1) === 1);
+			if (h < 8) {
+				this.modules[8][this.moduleCount - h - 1] = mod;
+			} else if (h < 9) {
+				this.modules[8][15 - h - 1 + 1] = mod;
+			} else {
+				this.modules[8][15 - h - 1] = mod;
+			}
+		}
+		this.modules[this.moduleCount - 8][8] = (!test);
+	},
+	mapData : function(data, maskPattern) {
+		var inc = -1;
+		var row = this.moduleCount - 1;
+		var bitIndex = 7;
+		var byteIndex = 0;
+		for (var col = this.moduleCount - 1; col > 0; col -= 2) {
+			if (col === 6) col--;
+			while (true) {
+				for (var c = 0; c < 2; c++) {
+					if (this.modules[row][col - c] === null) {
+						var dark = false;
+						if (byteIndex < data.length) {
+							dark = ( ( (data[byteIndex] >>> bitIndex) & 1) === 1);
+						}
+						var mask = QRUtil.getMask(maskPattern, row, col - c);
+						if (mask) {
+							dark = !dark;
+						}
+						this.modules[row][col - c] = dark;
+						bitIndex--;
+						if (bitIndex === -1) {
+							byteIndex++;
+							bitIndex = 7;
+						}
+					}
+				}
+				row += inc;
+				if (row < 0 || this.moduleCount <= row) {
+					row -= inc;
+					inc = -inc;
+					break;
+				}
+			}
+		}
+	}
+};
+QRCode.PAD0 = 0xEC;
+QRCode.PAD1 = 0x11;
+QRCode.createData = function(typeNumber, errorCorrectLevel, dataList) {
+	var rsBlocks = QRRSBlock.getRSBlocks(typeNumber, errorCorrectLevel);
+	var buffer = new QRBitBuffer();
+	for (var i = 0; i < dataList.length; i++) {
+		var data = dataList[i];
+		buffer.put(data.mode, 4);
+		buffer.put(data.getLength(), QRUtil.getLengthInBits(data.mode, typeNumber) );
+		data.write(buffer);
+	}
+	var totalDataCount = 0;
+	for (var x = 0; x < rsBlocks.length; x++) {
+		totalDataCount += rsBlocks[x].dataCount;
+	}
+	if (buffer.getLengthInBits() > totalDataCount * 8) {
+		throw new Error("code length overflow. (" + 
+            buffer.getLengthInBits() + 
+            ">" +  
+            totalDataCount * 8 + 
+            ")");
+	}
+	if (buffer.getLengthInBits() + 4 <= totalDataCount * 8) {
+		buffer.put(0, 4);
+	}
+	while (buffer.getLengthInBits() % 8 !== 0) {
+		buffer.putBit(false);
+	}
+	while (true) {
+		if (buffer.getLengthInBits() >= totalDataCount * 8) {
+			break;
+		}
+		buffer.put(QRCode.PAD0, 8);
+		if (buffer.getLengthInBits() >= totalDataCount * 8) {
+			break;
+		}
+		buffer.put(QRCode.PAD1, 8);
+	}
+	return QRCode.createBytes(buffer, rsBlocks);
+};
+QRCode.createBytes = function(buffer, rsBlocks) {
+	var offset = 0;
+	var maxDcCount = 0;
+	var maxEcCount = 0;
+	var dcdata = new Array(rsBlocks.length);
+	var ecdata = new Array(rsBlocks.length);
+	for (var r = 0; r < rsBlocks.length; r++) {
+		var dcCount = rsBlocks[r].dataCount;
+		var ecCount = rsBlocks[r].totalCount - dcCount;
+		maxDcCount = Math.max(maxDcCount, dcCount);
+		maxEcCount = Math.max(maxEcCount, ecCount);
+		dcdata[r] = new Array(dcCount);
+		for (var i = 0; i < dcdata[r].length; i++) {
+			dcdata[r][i] = 0xff & buffer.buffer[i + offset];
+		}
+		offset += dcCount;
+		var rsPoly = QRUtil.getErrorCorrectPolynomial(ecCount);
+		var rawPoly = new QRPolynomial(dcdata[r], rsPoly.getLength() - 1);
+		var modPoly = rawPoly.mod(rsPoly);
+		ecdata[r] = new Array(rsPoly.getLength() - 1);
+		for (var x = 0; x < ecdata[r].length; x++) {
+            var modIndex = x + modPoly.getLength() - ecdata[r].length;
+			ecdata[r][x] = (modIndex >= 0)? modPoly.get(modIndex) : 0;
+		}
+	}
+	var totalCodeCount = 0;
+	for (var y = 0; y < rsBlocks.length; y++) {
+		totalCodeCount += rsBlocks[y].totalCount;
+	}
+	var data = new Array(totalCodeCount);
+	var index = 0;
+	for (var z = 0; z < maxDcCount; z++) {
+		for (var s = 0; s < rsBlocks.length; s++) {
+			if (z < dcdata[s].length) {
+				data[index++] = dcdata[s][z];
+			}
+		}
+	}
+	for (var xx = 0; xx < maxEcCount; xx++) {
+		for (var t = 0; t < rsBlocks.length; t++) {
+			if (xx < ecdata[t].length) {
+				data[index++] = ecdata[t][xx];
+			}
+		}
+	}
+	return data;
+};
+module.exports = QRCode;
+
+};
+var Q=req("index"),E=req("QRErrorCorrectLevel");window.makeQR=function(t){var q=new Q(-1,E.M);q.addData(t);q.make();return q};})();</script><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>ArenaX</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@600;700;800&family=Roboto:wght@400;500;700;900&display=swap">
+<style>
+img, canvas { image-rendering: auto; }
+/* Layout: single-column mobile app shell. Black ground, deep-violet cards, violet primary, red for wallet and highlights. */
+:root {
+  --bg: #000000;
+  --card: #1a0536;
+  --card-soft: #240a47;
+  --primary: #6200ff;
+  --primary-dim: #3b0ea0;
+  --red: #ff1a1a;
+  --text: #ffffff;
+  --muted: #8f87a3;
+  --field: #ffffff;
+  --field-text: #3a3544;
+  --good: #14b866;
+  --font-display: "Poppins", "Segoe UI", sans-serif;
+  --font-body: "Roboto", "Segoe UI", sans-serif;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body {
+  -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility; font-synthesis: none;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 16px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.app { max-width: 440px; margin: 0 auto; min-height: 100dvh; display: flex; flex-direction: column; }
+.screen { display: none; flex: 1; flex-direction: column; min-width: 0; }
+.screen.on { display: flex; }
+h1, h2, h3 { font-family: var(--font-display); margin: 0; }
+button { font: inherit; color: inherit; cursor: pointer; }
+:focus-visible { outline: 3px solid #b99aff; outline-offset: 2px; }
+
+/* Auth */
+.auth { padding-block: 40px 28px; }
+.auth h1 { color: var(--primary); font-size: 2rem; line-height: 1.25; font-weight: 800; text-wrap: balance; margin-bottom: 32px; }
+.auth.center { justify-content: center; }
+form { display: flex; flex-direction: column; gap: 14px; }
+.field, select.code {
+  width: 100%; height: 56px; border: 0; border-radius: 999px;
+  background: var(--field); color: var(--field-text);
+  font: 500 1.05rem var(--font-body); padding: 0 22px;
+}
+.field::placeholder { color: #5b5667; }
+.phone { display: flex; gap: 12px; }
+select.code { width: 96px; flex: none; padding: 0 12px; font-weight: 700; }
+.error { color: #ff7a7a; font-size: .9rem; min-height: 1.2em; margin: 0; padding-left: 8px; }
+.legal { text-align: center; font-size: .95rem; line-height: 1.4; margin: 14px 0 4px; }
+.legal a, .link { color: var(--text); font-weight: 700; text-decoration: underline; text-underline-offset: 3px; background: none; border: 0; padding: 0; }
+.btn {
+  height: 56px; border: 0; border-radius: 999px; background: var(--primary);
+  font: 700 1.1rem var(--font-body); letter-spacing: .04em; text-transform: uppercase; color: #fff;
+}
+.btn:active { background: var(--primary-dim); }
+.alt { text-align: center; margin-top: 22px; font: 600 1.05rem var(--font-display); }
+.forgot { align-self: flex-end; font-weight: 500; font-size: .95rem; }
+
+/* Header */
+.top { display: flex; align-items: center; gap: 12px; padding-block: 16px 12px; }
+.avatar { width: 44px; height: 44px; border-radius: 50%; background: linear-gradient(135deg, var(--primary), #00b3ff); display: grid; place-items: center; font: 700 1.15rem var(--font-display); flex: none; }
+.who { flex: 1; min-width: 0; line-height: 1.25; }
+.who small { display: block; font-size: .95rem; }
+.who b { display: block; color: var(--red); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.icon-btn { background: none; border: 0; padding: 6px; display: grid; place-items: center; }
+.icon-btn svg { width: 26px; height: 26px; }
+.wallet-pill { display: flex; align-items: center; gap: 10px; background: var(--red); border: 0; border-radius: 6px; padding: 8px 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.wallet-pill svg { width: 24px; height: 24px; }
+.wallet-pill span.sep { width: 1px; height: 22px; background: #fff; }
+
+/* Content */
+.content { flex: 1; padding-bottom: 16px; }
+.notice { display: flex; align-items: center; gap: 14px; background: var(--card); border-radius: 18px; padding: 14px 16px; font: 700 .95rem var(--font-body); text-transform: uppercase; margin: 6px 0 18px; }
+.sec-title { color: var(--red); font: 700 1.15rem var(--font-body); text-transform: uppercase; display: flex; align-items: center; gap: 8px; }
+.sec-sub { color: var(--muted); font-size: .85rem; margin: 2px 0 12px; }
+.banner { border-radius: 20px; padding: 22px 20px; min-height: 150px; background: radial-gradient(circle at 85% 20%, #7b2bff 0, #2a0a5e 45%, #0d0221 100%); display: flex; flex-direction: column; justify-content: center; gap: 6px; margin-bottom: 22px; }
+.banner h3 { font-size: 1.5rem; line-height: 1.15; text-transform: uppercase; font-weight: 800; text-wrap: balance; }
+.banner p { margin: 0; color: #d6c8ff; }
+.tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 22px; }
+.tile { background: var(--card); border: 0; border-radius: 12px; padding: 20px 6px 16px; display: flex; flex-direction: column; align-items: center; gap: 12px; font: 500 1.05rem var(--font-body); }
+.tile svg { width: 54px; height: 54px; stroke: var(--red); }
+.modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.mode { border: 0; padding: 0; background: var(--card); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
+.mode .art { aspect-ratio: 1 / 1.05; display: grid; place-items: center; font: 800 1.5rem var(--font-display); font-style: italic; color: #ffd84d; }
+.mode:nth-child(1) .art { background: linear-gradient(160deg, #5a1dd6, #1a0536); }
+.mode:nth-child(2) .art { background: linear-gradient(160deg, #1c4dd6, #1a0536); }
+.mode:nth-child(3) .art { background: linear-gradient(160deg, #a31dd6, #1a0536); }
+.mode:nth-child(4) .art { background: linear-gradient(160deg, #d61d6a, #1a0536); }
+.mode:nth-child(5) .art { background: linear-gradient(160deg, #1dd6a3, #1a0536); }
+.mode:nth-child(6) .art { background: linear-gradient(160deg, #d6a31d, #1a0536); }
+.mode .lbl { background: var(--red); padding: 9px 4px; text-align: center; font: 700 .95rem var(--font-body); text-transform: uppercase; }
+
+/* Account */
+.profile { text-align: center; padding-block: 18px 6px; }
+.logo { width: 150px; height: 150px; border-radius: 50%; margin: 0 auto 16px; background: #fff; display: grid; place-items: center; }
+.logo div { width: 128px; height: 128px; border-radius: 50%; background: radial-gradient(circle, #14307a, #050b22); display: grid; place-items: center; font: 800 1.9rem var(--font-display); letter-spacing: .02em; }
+.profile h2 { font-size: 1.5rem; }
+.verified { color: var(--good); font: 700 1.6rem var(--font-display); margin-top: 6px; }
+.stats { background: var(--card); border-radius: 14px; display: grid; grid-template-columns: repeat(3, 1fr); padding: 22px 0; margin: 20px 0 16px; text-align: center; }
+.stats div + div { border-left: 1px solid #fff; }
+.stats b { display: block; font: 600 1.4rem var(--font-body); font-variant-numeric: tabular-nums; }
+.stats span { font: 500 1.1rem var(--font-body); line-height: 1.35; }
+.menu { display: flex; flex-direction: column; gap: 12px; margin: 0; padding: 0; list-style: none; }
+.row { width: 100%; display: flex; align-items: center; gap: 18px; background: var(--card); border: 0; border-radius: 8px; padding: 0 22px; height: 68px; font: 700 1.2rem var(--font-body); text-align: left; }
+.row svg { width: 30px; height: 30px; flex: none; }
+.row .chev { margin-left: auto; width: 22px; height: 22px; stroke: var(--muted); }
+.switch { margin-left: auto; width: 56px; height: 30px; border-radius: 999px; background: #3a1f66; position: relative; border: 0; padding: 0; }
+.switch::after { content: ""; position: absolute; top: 0; left: 24px; width: 32px; height: 32px; top: -1px; border-radius: 50%; background: #000; transition: left .15s; }
+.switch[aria-checked="true"] { background: #4b2a8c; }
+.switch[aria-checked="false"]::after { left: -2px; background: #8f87a3; }
+.logout { margin-top: 18px; background: transparent; border: 2px solid var(--red); color: #fff; }
+
+/* Wallet */
+.bar { display: flex; align-items: center; gap: 18px; padding-block: 18px; font: 700 1.35rem var(--font-body); }
+.bar svg { width: 28px; height: 28px; }
+.wcard { background: #1b0238; border-radius: 28px; padding: 28px 24px; display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+.wcard dl { margin: 0; display: flex; flex-direction: column; gap: 14px; }
+.wcard dt { color: #7f7790; font: 700 1.5rem var(--font-body); }
+.wcard dt.big { text-transform: uppercase; }
+.wcard dd { margin: 0 0 6px; font: 700 1.5rem var(--font-body); font-variant-numeric: tabular-nums; }
+.wbtns { display: flex; flex-direction: column; gap: 22px; padding-top: 70px; }
+.wbtns .btn { height: 52px; border-radius: 14px; font-size: 1rem; background: #3d0fa3; }
+.wbtns .btn.red { background: var(--red); }
+.hist { text-align: center; margin: 28px 0 0; font: 700 1.1rem var(--font-body); text-transform: uppercase; }
+.empty { text-align: center; color: var(--muted); margin-top: 40px; }
+
+/* Earn */
+.earn { background: var(--card); border-radius: 16px; padding: 22px; display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
+.earn h3 { font-size: 1.15rem; }
+.earn p { margin: 0; color: #cfc6e6; line-height: 1.45; }
+.coin { width: 30px; height: 30px; border-radius: 50%; background: #ffb81f; color: #7a4a00; display: inline-grid; place-items: center; font: 800 .9rem var(--font-display); vertical-align: middle; }
+
+/* Nav */
+nav.tabs { position: sticky; bottom: 0; background: var(--bg); display: grid; grid-template-columns: repeat(4, 1fr); padding-block: 8px 10px; }
+nav.tabs button { background: none; border: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; color: var(--muted); font: 700 1rem var(--font-body); padding: 4px; }
+nav.tabs button svg { width: 32px; height: 32px; }
+nav.tabs button[aria-current="page"] { color: #fff; }
+
+.toast { position: fixed; left: 50%; bottom: calc(96px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: #3f3f46; color: #fff; padding: 14px 24px; border-radius: 999px; font-size: 1.05rem; opacity: 0; pointer-events: none; transition: opacity .2s; max-width: calc(100% - 32px); text-align: center; z-index: 20; }
+.toast.on { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .toast, .switch::after { transition: none; } }
+@media (max-width: 380px) { .wcard dt, .wcard dd { font-size: 1.2rem; } .wbtns { padding-top: 50px; } }
+</style>
+<style>
+/* Admin panel: reuses the app's cards, fields and buttons */
+.adm h2 { font-size: 1.25rem; margin: 22px 0 10px; }
+.adm select.field { appearance: auto; }
+.adm .item { display: flex; align-items: center; gap: 8px; background: var(--card); border-radius: 12px; padding: 14px 16px; margin-bottom: 10px; }
+.adm .item > div { flex: 1; min-width: 0; }
+.adm .item b { display: block; overflow-wrap: anywhere; }
+.adm .item small { color: var(--muted); }
+.adm .mini { height: 36px; border: 0; border-radius: 10px; background: var(--primary); padding: 0 14px; font-weight: 700; }
+.adm .mini.red { background: var(--red); }
+.adm .none { text-align: center; color: var(--muted); margin: 10px 0; }
+</style>
+
+<style>
+/* Crispness pass: higher contrast, hairline edges, firmer type, precise icon rendering */
+:root { --muted: #b9b1cf; --field-text: #1d1926; --card: #1c0640; --card-soft: #2a0d52; --edge: rgba(255,255,255,.14); }
+html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; text-rendering: geometricPrecision; }
+body { font-weight: 500; line-height: 1.4; letter-spacing: .005em; font-kerning: normal; font-optical-sizing: auto; }
+h1, h2, h3 { font-weight: 800; letter-spacing: -.01em; }
+svg { shape-rendering: geometricPrecision; }
+svg [stroke] { vector-effect: non-scaling-stroke; }
+img { image-rendering: auto; -webkit-user-drag: none; }
+.field::placeholder { color: #4a4458; opacity: 1; font-weight: 500; }
+.field, select.code { font-weight: 600; box-shadow: inset 0 0 0 1px rgba(0,0,0,.12); }
+.field:focus, select.code:focus { outline: 3px solid #b99aff; outline-offset: 2px; }
+.error { color: #ff8f8f; font-weight: 600; }
+.btn, .mini, .tile, .mode, .row, .notice, .stats, .earn, .wcard, .adm .item { box-shadow: inset 0 0 0 1px var(--edge); }
+.btn { font-weight: 800; box-shadow: inset 0 0 0 1px rgba(255,255,255,.25); }
+.btn:active, .tile:active, .mode:active, .row:active { transform: scale(.985); }
+.tile, .row, .mode .lbl, .sec-title, nav.tabs button { font-weight: 700; }
+.sec-sub, .adm .item small, .empty, .adm .none { color: var(--muted); font-weight: 500; }
+.earn p, .banner p { color: #e4dcf7; }
+.stats div + div { border-left: 1px solid rgba(255,255,255,.55); }
+nav.tabs { border-top: 1px solid var(--edge); }
+nav.tabs button { font-weight: 700; }
+nav.tabs button svg { stroke-width: 2.2; }
+.tile svg, .row svg, .icon-btn svg { stroke-width: 2; }
+.wcard dt { color: #a79fbd; }
+.toast { font-weight: 600; box-shadow: 0 0 0 1px var(--edge); }
+</style>
+
+<div class="app">
+
+<!-- Sign up -->
+<section class="screen auth" id="s-signup" aria-label="Sign up">
+  <h1>Welcome to,<br>Sign Up</h1>
+  <form id="signup-form" novalidate>
+    <input class="field" id="su-first" name="first" placeholder="First Name" autocomplete="given-name" aria-label="First name">
+    <input class="field" id="su-last" name="last" placeholder="Last Name" autocomplete="family-name" aria-label="Last name">
+    <input class="field" id="su-user" name="username" placeholder="Username" autocomplete="username" aria-label="Username">
+    <div class="phone">
+      <select class="code" id="su-code" aria-label="Country code">
+        <option>+91</option><option>+1</option><option>+44</option><option>+971</option><option>+92</option><option>+880</option><option>+977</option>
+      </select>
+      <input class="field" id="su-mobile" name="mobile" type="tel" inputmode="numeric" placeholder="Mobile" autocomplete="tel-national" aria-label="Mobile number">
+    </div>
+    <input class="field" id="su-email" name="email" type="email" placeholder="Email" autocomplete="email" aria-label="Email">
+    <input class="field" id="su-pass" name="password" type="password" placeholder="Password" autocomplete="new-password" aria-label="Password">
+    <input class="field" id="su-pass2" name="confirm" type="password" placeholder="Confirm Password" autocomplete="new-password" aria-label="Confirm password">
+    <p class="error" id="su-error" role="alert"></p>
+    <p class="legal">By registering, I agree to the<br><a href="#terms">Terms and Conditions</a> and <a href="#privacy">Privacy Policy</a></p>
+    <button class="btn" type="button" id="su-btn">Sign up</button>
+  </form>
+  <p class="alt"><button class="link" type="button" data-go="login">Have an account?</button></p>
+</section>
+
+<!-- Login -->
+<section class="screen auth center on" id="s-login" aria-label="Login">
+  <h1>Welcome to,<br>Login</h1>
+  <form id="login-form" novalidate>
+    <input class="field" id="li-user" name="username" placeholder="Username" autocomplete="username" aria-label="Username">
+    <input class="field" id="li-pass" name="password" type="password" placeholder="Password" autocomplete="current-password" aria-label="Password">
+    <button class="link forgot" type="button" id="forgot">Forgot Password?</button>
+    <p class="error" id="li-error" role="alert"></p>
+    <button class="btn" type="button" id="li-btn">Login</button>
+  </form>
+  <p class="alt"><button class="link" type="button" data-go="signup" style="text-decoration:none">Don't have an account? <u>Sign Up</u></button></p>
+</section>
+
+<!-- Header shared by Play / Earn / Account -->
+<header class="top" id="top" hidden>
+  <div class="avatar" id="avatar" aria-hidden="true">A</div>
+  <div class="who"><small>Welcome Back,</small><b id="who-name">ARENAX PLAYER</b></div>
+  <button class="icon-btn" type="button" aria-label="Language" data-toast="Language options coming soon">
+    <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2c3 3 4.5 6.5 4.5 10S15 19 12 22c-3-3-4.5-6.5-4.5-10S9 5 12 2z"/></svg>
+  </button>
+  <button class="icon-btn" type="button" aria-label="Support" data-toast="Support is available 24/7 from Help">
+    <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"><path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="4" height="7" rx="1.5" fill="#fff"/><rect x="17" y="14" width="4" height="7" rx="1.5" fill="#fff"/></svg>
+  </button>
+  <button class="wallet-pill" type="button" data-go="wallet" aria-label="Wallet balance 0.00, add coins">
+    <svg viewBox="0 0 24 24" fill="#fff"><path d="M3 6a2 2 0 0 1 2-2h13v3h2a1 1 0 0 1 1 1v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6zm14 8a1.5 1.5 0 1 0 0 .01V14z"/></svg>
+    <span id="bal">0.00</span><span class="sep"></span><span aria-hidden="true">+</span>
+  </button>
+</header>
+
+<!-- Play (home) -->
+<section class="screen content" id="s-play" aria-label="Play">
+  <div class="notice">
+    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#ff4d4d" stroke-width="2" stroke-linejoin="round"><path d="M3 10v4l11 5V5L3 10z" fill="#ff1a1a"/><path d="M17 8a5 5 0 0 1 0 8"/></svg>
+    <span>Read all rules carefully !! ⚠</span>
+  </div>
+  <div class="sec-title">Important <svg width="20" height="20" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#ff1a1a"/><path d="M12 11v6M12 7v1.5" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/></svg></div>
+  <div class="sec-sub">Updates and Alerts</div>
+  <div class="banner" id="bn">
+    <h3>Join the ArenaX community channel</h3>
+    <p>Free match room codes and giveaways</p>
+  </div>
+  <div class="sec-title">My Contests <svg width="22" height="22" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#ff1a1a"/><path d="M7 12.5l3.2 3.2L17 9" stroke="#fff" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+  <div class="sec-sub">Your Tournaments Journey</div>
+  <div class="tiles">
+    <button class="tile" type="button" data-toast="No ongoing contests">
+      <svg viewBox="0 0 64 64" fill="none" stroke-width="4" stroke-linecap="round"><circle cx="32" cy="32" r="9"/><path d="M32 27l6 5-6 5z" fill="#ff1a1a" stroke="none"/><path d="M17 17a21 21 0 0 0 0 30M47 17a21 21 0 0 1 0 30M23 23a12 12 0 0 0 0 18M41 23a12 12 0 0 1 0 18"/></svg>Ongoing</button>
+    <button class="tile" type="button" data-toast="No upcoming contests">
+      <svg viewBox="0 0 64 64" fill="none" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M10 28A24 24 0 1 1 14 44"/><path d="M10 14v14h14"/><path d="M34 20v14l8 6"/></svg>Upcoming</button>
+    <button class="tile" type="button" data-toast="No completed contests">
+      <svg viewBox="0 0 64 64" fill="none" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><circle cx="32" cy="32" r="25"/><path d="M20 33l9 9 16-18"/></svg>Completed</button>
+  </div>
+  <div class="sec-title">Exclusive <svg width="20" height="20" viewBox="0 0 24 24"><rect x="1" y="1" width="22" height="22" rx="5" fill="#ff1a1a"/><path d="M6.5 12.5l4 4 7-8" stroke="#fff" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+  <div class="sec-sub">Big Winnings For All</div>
+  <div class="modes" id="mg">
+    <button class="mode" type="button" data-toast="Full Map matches open soon"><span class="art">FULL MAP</span><span class="lbl">Full Map</span></button>
+    <button class="mode" type="button" data-toast="LW 1vs1 matches open soon"><span class="art">LW 1VS1</span><span class="lbl">LW 1vs1</span></button>
+    <button class="mode" type="button" data-toast="CS 1vs1 matches open soon"><span class="art">CS 1VS1</span><span class="lbl">CS 1vs1</span></button>
+    <button class="mode" type="button" data-toast="CS 2vs2 matches open soon"><span class="art">CS 2VS2</span><span class="lbl">CS 2vs2</span></button>
+    <button class="mode" type="button" data-toast="Lone Wolf matches open soon"><span class="art">LONE</span><span class="lbl">Lone Wolf</span></button>
+    <button class="mode" type="button" data-toast="Squad matches open soon"><span class="art">SQUAD</span><span class="lbl">Squad</span></button>
+  </div>
+</section>
+
+<!-- Earn -->
+<section class="screen content" id="s-earn" aria-label="Earn">
+  <h2 style="margin:10px 0 16px">Earn coins</h2>
+  <div class="earn"><h3><span class="coin">C</span> Daily check-in</h3><p>Open the app every day to collect free coins for match entries.</p></div>
+  <div class="earn"><h3><span class="coin">C</span> Watch and earn</h3><p>Watch short sponsor clips and receive coins after each one.</p></div>
+  <div class="earn"><h3><span class="coin">C</span> Join the community</h3><p>Follow our community channel for free match room codes and giveaways.</p></div>
+</section>
+
+<!-- Account -->
+<section class="screen content" id="s-account" aria-label="Account">
+  <div class="profile">
+    <div class="logo"><div>ARENAX</div></div>
+    <h2 id="acc-name">Player</h2>
+    <div class="verified">Verified</div>
+  </div>
+  <div class="stats">
+    <div><b>0</b><span>Matches<br>Played</span></div>
+    <div><b>0</b><span>Total<br>Killed</span></div>
+    <div><b><span class="coin" style="width:24px;height:24px;font-size:.75rem">C</span> 0</b><span>Coins<br>Won</span></div>
+  </div>
+  <ul class="menu">
+    <li><div class="row" style="cursor:default">
+      <svg viewBox="0 0 24 24" fill="#fff"><path d="M12 22a2.5 2.5 0 0 0 2.5-2.5h-5A2.5 2.5 0 0 0 12 22zm7-6V11a7 7 0 0 0-5-6.7V3.5a2 2 0 0 0-4 0v.8A7 7 0 0 0 5 11v5l-2 2v1h18v-1l-2-2z"/></svg>
+      Push Notification
+      <button class="switch" id="push" type="button" role="switch" aria-checked="true" aria-label="Push notification"></button>
+    </div></li>
+    <li><button class="row" type="button" data-toast="Profile editing opens here"><svg viewBox="0 0 24 24" fill="#fff"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 4a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7zm0 14.2a8 8 0 0 1-6-2.9c.1-2 4-3.1 6-3.1s5.9 1.1 6 3.1a8 8 0 0 1-6 2.9z"/></svg>My Profile<svg class="chev" viewBox="0 0 24 24" fill="none" stroke-width="2.5" stroke-linecap="round"><path d="M9 5l7 7-7 7"/></svg></button></li>
+    <li><button class="row" type="button" data-go="wallet"><svg viewBox="0 0 24 24" fill="#fff"><path d="M3 6a2 2 0 0 1 2-2h13v3h2a1 1 0 0 1 1 1v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6zm12.5 7a1.5 1.5 0 1 0 3 0 1.5 1.5 0 0 0-3 0z"/></svg>My Wallet<svg class="chev" viewBox="0 0 24 24" fill="none" stroke-width="2.5" stroke-linecap="round"><path d="M9 5l7 7-7 7"/></svg></button></li>
+    <li><button class="row" type="button" data-toast="No matches yet"><svg viewBox="0 0 24 24" fill="#fff"><path d="M7 6h10a5 5 0 0 1 4.9 4l1 5.5a3 3 0 0 1-5.3 2.4L16 16H8l-1.6 1.9A3 3 0 0 1 1.1 15.5l1-5.5A5 5 0 0 1 7 6zm.5 3v1.5H6V12h1.5v1.5H9V12h1.5v-1.5H9V9zm8 1a1 1 0 1 0 0 2 1 1 0 0 0 0-2z"/></svg>My Matches<svg class="chev" viewBox="0 0 24 24" fill="none" stroke-width="2.5" stroke-linecap="round"><path d="M9 5l7 7-7 7"/></svg></button></li>
+    <li><button class="row" type="button" data-toast="No orders yet"><svg viewBox="0 0 24 24" fill="#fff"><path d="M1 3h3l.6 2H22l-2.5 8.5H7.5L8 15h12v2H6.5L3.2 5H1zm7 16a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm9 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></svg>My Order<svg class="chev" viewBox="0 0 24 24" fill="none" stroke-width="2.5" stroke-linecap="round"><path d="M9 5l7 7-7 7"/></svg></button></li>
+    <li><button class="row" type="button" data-toast="Statistics will appear after your first match"><svg viewBox="0 0 24 24" fill="#fff"><path d="M3 12h5v9H3zm7-9h5v18h-5zm7 6h5v12h-5z"/></svg>My Statistics<svg class="chev" viewBox="0 0 24 24" fill="none" stroke-width="2.5" stroke-linecap="round"><path d="M9 5l7 7-7 7"/></svg></button></li>
+    <li><button class="row logout" type="button" id="logout" style="justify-content:center">Log out</button></li>
+  </ul>
+</section>
+
+<!-- Wallet -->
+<section class="screen content" id="s-wallet" aria-label="My Wallet">
+  <div class="bar">
+    <button class="icon-btn" type="button" data-go="account" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12H5M11 5l-7 7 7 7"/></svg></button>
+    My Wallet
+  </div>
+  <div class="wcard">
+    <dl>
+      <div><dt class="big">Total Balance</dt><dd>0.00 Coins</dd></div>
+      <div><dt>Deposited</dt><dd>0.00 Coins</dd></div>
+      <div><dt>Winning</dt><dd>0.00 Coins</dd></div>
+      <div><dt>Earnings</dt><dd>0 Coins</dd></div>
+      <div><dt class="big">Payouts</dt><dd>0 Coins</dd></div>
+    </dl>
+    <div class="wbtns">
+      <button class="btn" type="button" data-go="deposit">Add Coins</button>
+      <button class="btn red" type="button" data-go="withdraw">Redeem Coins</button>
+    </div>
+  </div>
+  <h2 class="hist">Wallet History</h2>
+  <div id="wh"><p class="empty">No transactions yet.</p></div>
+</section>
+
+
+<section class="screen content" id="s-deposit" aria-label="Add coins">
+  <div class="bar"><button class="icon-btn" type="button" data-go="wallet" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12H5M11 5l-7 7 7 7"/></svg></button>Add Coins</div>
+  <div style="display:flex;flex-direction:column;gap:14px">
+    <input class="field" id="d-amt" type="number" min="1" step="0.01" inputmode="decimal" placeholder="Amount in Rs (1 Rs = 1 coin)" aria-label="Deposit amount">
+    <button class="btn" type="button" id="d-go">Generate QR</button>
+    <div id="d-qr" style="text-align:center;display:none;flex-direction:column;gap:14px;align-items:center">
+      <div id="d-code" style="background:#fff;padding:6px;border-radius:16px;line-height:0"></div>
+      <h2 id="d-pay"></h2><p class="sec-sub" style="margin:0">Scan with any UPI app and pay exactly this amount.</p>
+      <input class="field" id="d-utr" placeholder="UTR / transaction ID" aria-label="UTR">
+      <button class="btn" type="button" id="d-done" style="width:100%">I have paid</button>
+    </div>
+    <p class="error" id="d-err" role="alert"></p>
+  </div>
+</section>
+<section class="screen content" id="s-withdraw" aria-label="Redeem coins">
+  <div class="bar"><button class="icon-btn" type="button" data-go="wallet" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12H5M11 5l-7 7 7 7"/></svg></button>Redeem Coins</div>
+  <div style="display:flex;flex-direction:column;gap:14px">
+    <input class="field" id="w-amt" type="number" min="1" step="0.01" inputmode="decimal" placeholder="Coins to redeem" aria-label="Withdraw amount">
+    <input class="field" id="w-upi" placeholder="Your UPI ID" aria-label="UPI ID">
+    <p class="error" id="w-err" role="alert"></p>
+    <button class="btn" type="button" id="w-go">Request withdrawal</button>
+  </div>
+</section>
+<section class="screen content" id="s-matches" aria-label="Matches">
+  <div class="bar"><button class="icon-btn" type="button" data-go="play" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12H5M11 5l-7 7 7 7"/></svg></button><span id="mt-title">Matches</span></div>
+  <div id="mt-list"></div>
+</section>
+<section class="screen content" id="s-board" aria-label="Leaderboard">
+  <h2 style="margin:10px 0 16px">Leaderboard</h2><div id="lb"></div>
+</section>
+<!-- Admin panel -->
+<section class="screen content adm" id="s-admin" aria-label="Admin panel">
+  <div class="bar">Admin Panel</div>
+  <div class="stats">
+    <div><b id="a-users">0</b><span>Players</span></div>
+    <div><b id="a-t">0</b><span>Tournaments</span></div>
+    <div><b id="a-coins">0</b><span>Total<br>Coins</span></div>
+  </div>
+  <h2>Create tournament</h2>
+  <form id="t-form" novalidate>
+    <input class="field" id="t-title" placeholder="Tournament title" aria-label="Tournament title">
+    <select class="field" id="t-mode" aria-label="Mode"><option>Full Map</option><option>LW 1vs1</option><option>CS 1vs1</option><option>CS 2vs2</option><option>Lone Wolf</option><option>Squad</option></select>
+    <input class="field" id="t-fee" type="number" min="0" inputmode="numeric" placeholder="Entry fee (coins)" aria-label="Entry fee">
+    <input class="field" id="t-prize" type="number" min="0" inputmode="numeric" placeholder="Prize pool (coins)" aria-label="Prize pool">
+    <input class="field" id="t-when" type="datetime-local" aria-label="Start time">
+    <p class="error" id="t-error" role="alert"></p>
+    <button class="btn" type="button" id="t-btn">Create</button>
+  </form>
+  <h2>Tournaments</h2>
+  <div id="t-list"></div>
+  <h2>Players</h2>
+  <div id="u-list"></div>
+  
+  <h2>App settings</h2>
+  <form id="c-form" onsubmit="return false" style="display:flex;flex-direction:column;gap:14px">
+    <input class="field" id="c-name" placeholder="App name" aria-label="App name">
+    <input class="field" id="c-upi" placeholder="Receiving UPI ID (for deposit QR)" aria-label="UPI ID">
+    <label class="sec-sub" for="c-logo">App logo</label><input id="c-logo" type="file" accept="image/*">
+    <button class="btn" type="button" id="c-save">Save settings</button>
+  </form>
+  <h2>Banners</h2><input id="b-file" type="file" accept="image/*" multiple><div id="a-banners" style="margin-top:10px"></div>
+  <h2>Modes</h2>
+  <form onsubmit="return false" style="display:flex;flex-direction:column;gap:14px">
+    <input class="field" id="md-name" placeholder="Mode name" aria-label="Mode name"><input id="md-img" type="file" accept="image/*">
+    <button class="btn" type="button" id="md-add">Add mode</button></form>
+  <div id="a-modes" style="margin-top:10px"></div>
+  <h2>Create match</h2>
+  <form onsubmit="return false" style="display:flex;flex-direction:column;gap:14px">
+    <select class="field" id="m-mode" aria-label="Mode"></select>
+    <input class="field" id="m-title" placeholder="Match title" aria-label="Match title">
+    <input class="field" id="m-slots" type="number" min="1" placeholder="Slots" aria-label="Slots">
+    <input class="field" id="m-fee" type="number" min="0" placeholder="Entry (coins)" aria-label="Entry">
+    <input class="field" id="m-when" type="datetime-local" aria-label="Date and time">
+    <input class="field" id="m-prz" placeholder="Rank prizes, e.g. 500,300,100" aria-label="Rank prizes">
+    <p class="error" id="m-err" role="alert"></p>
+    <button class="btn" type="button" id="m-add">Create match</button></form>
+  <h2>Matches</h2><div id="a-matches"></div>
+  <h2>Deposit requests</h2><div id="a-deps"></div>
+  <h2>Withdraw requests</h2><div id="a-wds"></div>
+  <ul class="menu" style="margin-top:12px"><li><button class="row logout" type="button" id="adm-out" style="justify-content:center">Log out</button></li></ul>
+</section>
+
+<nav class="tabs" id="tabs" aria-label="Main" hidden>
+  <button type="button" data-go="earn"><svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="13" fill="#ffb81f"/><circle cx="16" cy="16" r="9.5" fill="none" stroke="#fff3c4" stroke-width="2"/><path d="M19 12.5a4.5 4.5 0 1 0 0 7" stroke="#fff3c4" stroke-width="2.4" fill="none" stroke-linecap="round"/></svg>Earn</button>
+  <button type="button" data-go="play"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 6h10a5 5 0 0 1 4.9 4l1 5.5a3 3 0 0 1-5.3 2.4L16 16H8l-1.6 1.9A3 3 0 0 1 1.1 15.5l1-5.5A5 5 0 0 1 7 6z"/></svg>Play</button>
+  <button type="button" data-go="board"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 3h10v2h4v3a4 4 0 0 1-4 4 5 5 0 0 1-4 3v2h3v3H8v-3h3v-2a5 5 0 0 1-4-3 4 4 0 0 1-4-4V5h4V3zm-2 4v1a2 2 0 0 0 2 2V7H5zm12 0v3a2 2 0 0 0 2-2V7h-2z"/></svg>Ranks</button>
+  <button type="button" data-go="account"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="7" r="4.5"/><path d="M3 21c0-4.6 4-7 9-7s9 2.4 9 7z"/></svg>Account</button>
+</nav>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function () {
+  var $ = function (s, r) { return (r || document).querySelector(s); };
+  var screens = { signup: "s-signup", login: "s-login", play: "s-play", earn: "s-earn", account: "s-account", wallet: "s-wallet", admin: "s-admin", deposit: "s-deposit", withdraw: "s-withdraw", matches: "s-matches", board: "s-board" };
+  var authScreens = { signup: 1, login: 1 };
+  var tabScreens = { play: 1, earn: 1, account: 1, board: 1 };
+  var user = { name: "ArenaX Player", username: "arenax_player" };
+  var tt;
+  var store = {
+    get: function (k, d) { try { var v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } },
+    set: function (k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+  };
+  var users = store.get("arenax_users", []), tours = store.get("arenax_tours", []);
+  /* Password hashing: salted SHA-256 (Web Crypto), with a salted fallback hash if Web Crypto is unavailable. */
+  function hashPw(pw, salt) {
+    var txt = salt + ":" + pw;
+    if (window.crypto && crypto.subtle && window.TextEncoder) {
+      return crypto.subtle.digest("SHA-256", new TextEncoder().encode(txt)).then(function (b) {
+        return "s256:" + Array.prototype.map.call(new Uint8Array(b), function (x) { return ("0" + x.toString(16)).slice(-2); }).join("");
+      });
+    }
+    var h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+    for (var i = 0; i < txt.length; i++) { var c = txt.charCodeAt(i); h1 = Math.imul(h1 ^ c, 2654435761); h2 = Math.imul(h2 ^ c, 1597334677); }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    return Promise.resolve("fb:" + (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16));
+  }
+  function newSalt() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 10); }
+  function findUser(n) { n = String(n).toLowerCase(); return users.filter(function (x) { return x.username.toLowerCase() === n; })[0]; }
+
+  function toast(msg) {
+    var t = $("#toast"); t.textContent = msg; t.classList.add("on");
+    clearTimeout(tt); tt = setTimeout(function () { t.classList.remove("on"); }, 2200);
+  }
+  function show(name) {
+    Object.keys(screens).forEach(function (k) { $("#" + screens[k]).classList.toggle("on", k === name); });
+    var loggedIn = !authScreens[name];
+    $("#top").hidden = !(loggedIn && !{ wallet: 1, admin: 1, deposit: 1, withdraw: 1, matches: 1 }[name]);
+    $("#tabs").hidden = !loggedIn || name === "admin";
+    document.querySelectorAll("#tabs button").forEach(function (b) {
+      if (tabScreens[name] && b.dataset.go === name) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+    });
+    window.scrollTo(0, 0);
+  }
+  function enter(username, first) {
+    var rec = findUser(username || "");
+    user.username = username || user.username;
+    user.name = (rec && rec.name) || first || user.name;
+    $("#who-name").textContent = user.username.toUpperCase();
+    $("#acc-name").textContent = user.name;
+    $("#avatar").textContent = (user.name[0] || "A").toUpperCase();
+    var c = (rec ? rec.coins : 0).toFixed(2);
+    $("#bal").textContent = c;
+    $(".wcard dd").textContent = c + " Coins";
+    $(".wallet-pill").setAttribute("aria-label", "Wallet balance " + c + ", add coins");
+    show("play");
+  }
+
+  document.addEventListener("click", function (e) {
+    var g = e.target.closest("[data-go]");
+    if (g) { show(g.dataset.go); return; }
+    var t = e.target.closest("[data-toast]");
+    if (t) toast(t.dataset.toast);
+  });
+
+  /* ===== Backend connection ===== */
+  /* Same server serves this page, so API is "". To host the page elsewhere, set window.ARENAX_API = "https://your-server" before this script. */
+  var API = window.ARENAX_API || (location.protocol === "file:" ? "http://localhost:3000" : "");
+  function tok() { try { return localStorage.getItem("ax_token") || ""; } catch (e) { return ""; } }
+  function setTok(t) { try { if (t) localStorage.setItem("ax_token", t); else localStorage.removeItem("ax_token"); } catch (e) {} }
+  function api(path, method, body) {
+    var h = { "Content-Type": "application/json" }, t = tok();
+    if (t) h.Authorization = "Bearer " + t;
+    return fetch(API + path, { method: method || "GET", headers: h, body: body ? JSON.stringify(body) : undefined })
+      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { if (!r.ok) { var e = new Error(d.error || "Request failed"); e.status = r.status; throw e; } return d; }); },
+        function () { throw new Error("Cannot reach the server. Check your connection."); });
+  }
+  /* Mirror the server's user into the local list so the rest of the screens can display it. */
+  function syncUser(u) {
+    var ex = findUser(u.username);
+    if (!ex) { ex = { username: u.username }; users.push(ex); }
+    ex.name = u.name; ex.last = u.last; ex.email = u.email; ex.mobile = u.mobile; ex.coins = u.coins; ex.won = u.won || 0;
+    store.set("arenax_users", users);
+  }
+  function busy(btn, on) { btn.disabled = on; btn.style.opacity = on ? ".6" : ""; }
+
+  $("#signup-form").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var v = function (id) { return $(id).value.trim(); };
+    var err = $("#su-error"), btn = $("#su-btn");
+    if (!v("#su-first") || !v("#su-last") || !v("#su-user") || !v("#su-mobile") || !v("#su-email") || !$("#su-pass").value || !$("#su-pass2").value) { err.textContent = "Fill in every field to create your account."; return; }
+    if (!/^\d{6,12}$/.test(v("#su-mobile"))) { err.textContent = "Enter a mobile number with 6 to 12 digits."; return; }
+    if (!/^\S+@\S+\.\S+$/.test(v("#su-email"))) { err.textContent = "Enter a valid email address."; return; }
+    if ($("#su-pass").value.length < 6) { err.textContent = "Use a password with at least 6 characters."; return; }
+    if ($("#su-pass").value !== $("#su-pass2").value) { err.textContent = "Passwords do not match."; return; }
+    err.textContent = ""; busy(btn, true);
+    api("/api/auth/signup", "POST", { first: v("#su-first"), last: v("#su-last"), username: v("#su-user"), mobile: $("#su-code").value + " " + v("#su-mobile"), email: v("#su-email"), password: $("#su-pass").value })
+      .then(function (d) {
+        setTok(d.token); syncUser(d.user);
+        $("#su-pass").value = ""; $("#su-pass2").value = "";
+        enter(d.user.username, d.user.name);
+      })
+      .catch(function (x) { err.textContent = x.message; })
+      .then(function () { busy(btn, false); });
+  });
+
+  $("#login-form").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var u = $("#li-user").value.trim(), pw = $("#li-pass").value, err = $("#li-error"), btn = $("#li-btn");
+    if (!u || !pw) { err.textContent = "Enter your username and password."; return; }
+    err.textContent = ""; busy(btn, true);
+    api("/api/auth/login", "POST", { username: u, password: pw })
+      .then(function (d) {
+        setTok(d.token); $("#li-pass").value = "";
+        if (d.admin) { show("admin"); adminSync(); return; }
+        syncUser(d.user); enter(d.user.username, d.user.name);
+      })
+      .catch(function (x) { err.textContent = x.message; })
+      .then(function () { busy(btn, false); });
+  });
+
+  /* Stay logged in after refresh: ask the server who the token belongs to. */
+  if (tok()) {
+    api("/api/me").then(function (d) { if (d.admin) { show("admin"); adminSync(); return; } syncUser(d.user); enter(d.user.username, d.user.name); })
+      .catch(function (x) { if (x.status === 401 || x.status === 404) setTok(""); });
+  }
+
+  $("#forgot").addEventListener("click", function () { toast("Password reset link will be sent to your email"); });
+  $("#logout").addEventListener("click", function () { setTok(""); show("login"); toast("Log out successfully"); });
+  $("#push").addEventListener("click", function (e) {
+    var on = e.currentTarget.getAttribute("aria-checked") !== "true";
+    e.currentTarget.setAttribute("aria-checked", String(on));
+  });
+
+  /* Admin panel */
+  function item(parent, title, sub, btns) {
+    var it = document.createElement("div"), d = document.createElement("div"), b = document.createElement("b"), s = document.createElement("small");
+    it.className = "item"; b.textContent = title; s.textContent = sub; d.appendChild(b); d.appendChild(s); it.appendChild(d);
+    btns.forEach(function (x) {
+      var k = document.createElement("button");
+      k.type = "button"; k.className = "mini" + (x.red ? " red" : ""); k.textContent = x.label; k.dataset.act = x.act; k.dataset.id = x.id;
+      it.appendChild(k);
+    });
+    parent.appendChild(it);
+  }
+  function none(parent, text) { var p = document.createElement("p"); p.className = "none"; p.textContent = text; parent.appendChild(p); }
+  function renderAdmin() {
+    var tl = $("#t-list"), ul = $("#u-list"), total = 0;
+    tl.textContent = ""; ul.textContent = "";
+    tours.forEach(function (t) {
+      item(tl, t.title, t.mode + " · Entry " + t.fee + " · Prize " + t.prize + (t.when ? " · " + t.when.replace("T", " ") : ""), [{ label: "Delete", act: "delt", id: t.id, red: 1 }]);
+    });
+    if (!tours.length) none(tl, "No tournaments yet.");
+    users.forEach(function (u) {
+      total += u.coins;
+      item(ul, u.name + " (@" + u.username + ")", u.mobile + " · " + u.coins.toFixed(2) + " coins", [{ label: "+100", act: "coin", id: u.username }, { label: "Remove", act: "delu", id: u.username, red: 1 }]);
+    });
+    if (!users.length) none(ul, "No players have signed up yet.");
+    $("#a-users").textContent = users.length; $("#a-t").textContent = tours.length; $("#a-coins").textContent = total.toFixed(0);
+  }
+  $("#t-form").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var title = $("#t-title").value.trim(), fee = $("#t-fee").value, prize = $("#t-prize").value, err = $("#t-error");
+    if (!title || fee === "" || prize === "") { err.textContent = "Enter a title, entry fee and prize pool."; return; }
+    if (+fee < 0 || +prize < 0) { err.textContent = "Fee and prize cannot be negative."; return; }
+    err.textContent = "";
+    tours.unshift({ id: String(Date.now()), title: title, mode: $("#t-mode").value, fee: +fee, prize: +prize, when: $("#t-when").value });
+    store.set("arenax_tours", tours);
+    $("#t-form").reset(); renderAdmin(); toast("Tournament created");
+  });
+  $("#adm-out").addEventListener("click", function () { setTok(""); show("login"); toast("Log out successfully"); });
+
+  /* Button click and Enter run the form handlers directly, so they still work
+     in sandboxed previews that block native form submission. */
+  [["#signup-form", "#su-btn"], ["#login-form", "#li-btn"], ["#t-form", "#t-btn"]].forEach(function (p) {
+    var f = $(p[0]);
+    function go() { f.dispatchEvent(new Event("submit", { cancelable: true, bubbles: true })); }
+    $(p[1]).addEventListener("click", go);
+    f.addEventListener("keydown", function (e) { if (e.key === "Enter" && e.target.tagName === "INPUT") { e.preventDefault(); go(); } });
+  });
+  /* ===== ArenaX extension: deposits, withdrawals, modes, matches, leaderboard, branding ===== */
+  /* PUBLIC key only. Never put the secret key in this file: anyone can read it via View Source. */
+  var PAY = { pk: "pk_ffb76758d8ecb1c0a8ec9426396a479333dccb69f151b07a0487858a18dae29a" };
+  var cfg = { name: "ArenaX", logo: "", upi: "", banners: [] }, modes = [], lb = [];
+  var matches = [], deps = [], wds = [], cur = null;
+  var bnDefault = $("#bn").innerHTML;
+  /* All data lives on the server; these functions load it. */
+  function applyState(d) { cfg = d.cfg; modes = d.modes; matches = d.matches; lb = d.leaderboard || []; deps = d.deps || []; wds = d.wds || []; }
+  function sync(done) {
+    if (!tok()) return;
+    api("/api/state").then(function (d) { applyState(d); users = []; syncUser(d.user); brand(); bal(); rPlay(); if (done) done(); })
+      .catch(function (x) { if (x.status === 401) { setTok(""); show("login"); } else toast(x.message); });
+  }
+  function adminSync() {
+    api("/api/admin/state").then(function (d) { applyState(d); users = d.users; brand(); renderAdmin(); })
+      .catch(function (x) { if (x.status === 401) { setTok(""); show("login"); } toast(x.message); });
+  }
+  function el(t, c, x) { var e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; }
+  function me() { return findUser(user.username); }
+  function fmt(n) { return (Math.round(n * 100) / 100).toFixed(2); }
+  function amtOf(v) { v = String(v).trim(); return /^\d+(\.\d{1,2})?$/.test(v) && +v >= 1 ? fmt(+v) : null; }
+  function pic(f, cb) { var r = new FileReader(); r.onload = function () { var i = new Image(); i.onload = function () { var s = Math.min(1, 1400 / i.width), c = document.createElement("canvas"), x; c.width = Math.round(i.width * s); c.height = Math.round(i.height * s); x = c.getContext("2d"); x.imageSmoothingEnabled = true; x.imageSmoothingQuality = "high"; x.drawImage(i, 0, 0, c.width, c.height); cb(c.toDataURL("image/jpeg", .92)); }; i.src = r.result; }; r.readAsDataURL(f); }
+  function bal() { var r = me(), c = fmt(r ? r.coins : 0); $("#bal").textContent = c; $(".wcard dd").textContent = c + " Coins"; }
+  function brand() {
+    document.title = cfg.name; var L = $(".logo div");
+    if (cfg.logo) { L.style.background = "url(" + cfg.logo + ") center/cover"; L.textContent = ""; } else { L.style.background = ""; L.textContent = cfg.name.toUpperCase(); }
+  }
+  function rPlay() {
+    var b = $("#bn");
+    if (cfg.banners.length) {
+      b.style.cssText = "display:flex;flex-direction:row;overflow-x:auto;scroll-snap-type:x mandatory;gap:8px;padding:0;background:none;min-height:0"; b.textContent = "";
+      cfg.banners.forEach(function (u) { var i = el("img"); i.src = u; i.alt = "Banner"; i.style.cssText = "flex:0 0 100%;scroll-snap-align:center;border-radius:20px;object-fit:cover;aspect-ratio:2/1"; b.appendChild(i); });
+    } else { b.style.cssText = ""; b.innerHTML = bnDefault; }
+    var g = $("#mg"); g.textContent = "";
+    modes.forEach(function (m) {
+      var k = el("button", "mode"), a = el("span", "art", m.img ? "" : m.name.toUpperCase()), l = el("span", "lbl", m.name);
+      k.type = "button"; if (m.img) a.style.background = "url(" + m.img + ") center/cover"; k.appendChild(a); k.appendChild(l);
+      k.addEventListener("click", function () { cur = m.id; show("matches"); }); g.appendChild(k);
+    });
+  }
+  function rMatches() {
+    var m = modes.filter(function (x) { return x.id === cur; })[0], L = $("#mt-list"); $("#mt-title").textContent = m ? m.name : "Matches"; L.textContent = "";
+    var a = matches.filter(function (x) { return x.mode === cur; });
+    a.forEach(function (x) {
+      var c = el("div", "earn"), mine = x.joined.indexOf(user.username) > -1, full = x.joined.length >= x.slots;
+      c.appendChild(el("h3", null, x.title));
+      c.appendChild(el("p", null, "Entry " + x.entry + " · Slots " + x.joined.length + "/" + x.slots + (x.when ? " · " + x.when.replace("T", " ") : "")));
+      c.appendChild(el("p", null, "Prizes: " + (x.prizes.map(function (p, i) { return "#" + (i + 1) + " " + p; }).join(", ") || "-")));
+      if (x.notice) c.appendChild(el("p", null, "Notice: " + x.notice));
+      var b = el("button", "btn", x.done ? "Finished" : mine ? "Joined" : full ? "Full" : "Join"); b.type = "button"; b.disabled = x.done || mine || full; b.dataset.join = x.id; c.appendChild(b); L.appendChild(c);
+    });
+    if (!a.length) L.appendChild(el("p", "empty", "No matches yet."));
+  }
+  $("#s-matches").addEventListener("click", function (e) {
+    var b = e.target.closest("[data-join]"); if (!b) return;
+    b.disabled = true;
+    api("/api/matches/" + encodeURIComponent(b.dataset.join) + "/join", "POST")
+      .then(function () { toast("Joined match"); sync(rMatches); })
+      .catch(function (x) { toast(x.message); b.disabled = false; });
+  });
+  function rBoard() {
+    var L = $("#lb"); L.textContent = "";
+    lb.forEach(function (u, i) {
+      var c = el("div", "earn"); c.style.flexDirection = "row"; c.style.justifyContent = "space-between";
+      c.appendChild(el("b", null, "#" + (i + 1) + "  " + u.username)); c.appendChild(el("span", null, fmt(u.won || 0) + " won")); L.appendChild(c);
+    });
+    if (!lb.length) L.appendChild(el("p", "empty", "No players yet."));
+  }
+  function rWallet() {
+    var L = $("#wh"), r = me(), rows = []; L.textContent = "";
+    deps.filter(function (d) { return d.u === user.username; }).forEach(function (d) { rows.push([d.id, "Deposit " + d.amt + " (" + d.st + ")"]); });
+    wds.filter(function (d) { return d.u === user.username; }).forEach(function (d) { rows.push([d.id, "Withdraw " + d.amt + " (" + d.st + ")"]); });
+    rows.sort(function (a, b) { return b[0] - a[0]; }).forEach(function (x) { var c = el("div", "earn", x[1]); c.style.padding = "14px 18px"; L.appendChild(c); });
+    if (!rows.length) L.appendChild(el("p", "empty", "No transactions yet."));
+    bal();
+  }
+  /* Deposit: QR amount is always the exact typed amount, formatted to 2 decimals */
+  $("#d-go").addEventListener("click", function () {
+    var a = amtOf($("#d-amt").value), err = $("#d-err"); err.textContent = "";
+    if (!a) { err.textContent = "Enter a valid amount, minimum 1."; return; }
+    if (!cfg.upi) { err.textContent = "No receiving UPI ID is set. Admin: open Admin panel > Settings and enter it."; return; }
+    var link = "upi://pay?pa=" + encodeURIComponent(cfg.upi) + "&pn=" + encodeURIComponent(cfg.name) + "&am=" + a + "&cu=INR&tn=" + encodeURIComponent(cfg.name + " deposit");
+    var c = $("#d-code"), q = makeQR(link), n = q.getModuleCount(), d = "";
+    for (var y = 0; y < n; y++) for (var x = 0; x < n; x++) if (q.isDark(y, x)) d += "M" + x + " " + y + "h1v1h-1z";
+    c.innerHTML = '<svg viewBox="-2 -2 ' + (n + 4) + " " + (n + 4) + '" width="240" height="240" shape-rendering="crispEdges" role="img" aria-label="Payment QR"><rect x="-2" y="-2" width="' + (n + 4) + '" height="' + (n + 4) + '" fill="#fff"/><path d="' + d + '" fill="#000"/></svg>';
+    $("#d-pay").textContent = "Pay Rs " + a; $("#d-qr").style.display = "flex"; $("#d-qr").dataset.amt = a;
+  });
+  $("#d-amt").addEventListener("input", function () { $("#d-qr").style.display = "none"; });
+  $("#d-done").addEventListener("click", function () {
+    var u = $("#d-utr").value.trim(), a = $("#d-qr").dataset.amt;
+    if (u.length < 6) { $("#d-err").textContent = "Enter the UTR / transaction ID from your UPI app."; return; }
+    api("/api/deposits", "POST", { amt: a, utr: u }).then(function () {
+      $("#d-utr").value = ""; $("#d-amt").value = ""; $("#d-qr").style.display = "none"; $("#d-err").textContent = "";
+      toast("Submitted. Coins are added after admin verifies."); show("wallet");
+    }).catch(function (x) { $("#d-err").textContent = x.message; });
+  });
+  $("#w-go").addEventListener("click", function () {
+    var a = amtOf($("#w-amt").value), up = $("#w-upi").value.trim(), r = me(), err = $("#w-err");
+    if (!a || !up) { err.textContent = "Enter an amount and your UPI ID."; return; }
+    if (!r || r.coins < +a) { err.textContent = "Not enough coins."; return; }
+    err.textContent = "";
+    api("/api/withdrawals", "POST", { amt: a, upi: up }).then(function () {
+      $("#w-amt").value = ""; toast("Withdrawal requested"); show("wallet");
+    }).catch(function (x) { err.textContent = x.message; });
+  });
+  /* Admin */
+  function rAdm2() {
+    $("#c-name").value = cfg.name; $("#c-upi").value = cfg.upi;
+    var B = $("#a-banners"), M = $("#a-modes"), X = $("#a-matches"), D = $("#a-deps"), W = $("#a-wds"), s = $("#m-mode");
+    [B, M, X, D, W, s].forEach(function (n) { n.textContent = ""; });
+    cfg.banners.forEach(function (u, i) { item(B, "Banner " + (i + 1), "", [{ label: "Remove", act: "bn_rm", id: String(i), red: 1 }]); thumb(B, u); });
+    modes.forEach(function (m) { item(M, m.name, m.img ? "Has photo" : "No photo", [{ label: m.img ? "Change photo" : "Add photo", act: "md_ph", id: m.id }, { label: "Remove", act: "md_rm", id: m.id, red: 1 }]); if (m.img) thumb(M, m.img); var o = el("option", null, m.name); o.value = m.id; s.appendChild(o); });
+    matches.forEach(function (x) { item(X, x.title, x.joined.length + "/" + x.slots + " · entry " + x.entry + (x.done ? " · finished" : ""), [{ label: "Notice", act: "mt_n", id: x.id }, { label: "Prizes", act: "mt_p", id: x.id }, { label: "Delete", act: "mt_d", id: x.id, red: 1 }]); });
+    if (!matches.length) none(X, "No matches yet.");
+    deps.filter(function (d) { return d.st === "pending"; }).forEach(function (d) { item(D, "@" + d.u + " · Rs " + d.amt, "UTR " + d.utr, [{ label: "Approve", act: "dp_ok", id: String(d.id) }, { label: "Reject", act: "dp_no", id: String(d.id), red: 1 }]); });
+    if (!D.children.length) none(D, "No pending deposits.");
+    wds.filter(function (d) { return d.st === "pending"; }).forEach(function (d) { item(W, "@" + d.u + " · " + d.amt + " coins", "UPI " + d.upi, [{ label: "Approve", act: "wd_ok", id: String(d.id) }, { label: "Reject", act: "wd_no", id: String(d.id), red: 1 }]); });
+    if (!W.children.length) none(W, "No pending withdrawals.");
+  }
+  var _ra = renderAdmin; renderAdmin = function () { _ra(); rAdm2(); };
+  function thumb(P, src) { var i = el("img"); i.src = src; i.alt = ""; i.style.cssText = "width:56px;height:40px;object-fit:cover;border-radius:8px;order:-1"; P.lastChild.insertBefore(i, P.lastChild.firstChild); }
+  var phId = null, ph = el("input"); ph.type = "file"; ph.accept = "image/*"; ph.hidden = true; document.body.appendChild(ph);
+  ph.addEventListener("change", function () { var f = ph.files[0], id = phId; if (f) pic(f, function (d) { api("/api/admin/modes/" + encodeURIComponent(id), "PUT", { img: d }).then(function () { toast("Mode photo updated"); adminSync(); }).catch(function (x) { toast(x.message); }); }); ph.value = ""; });
+  function byId(a, id) { return a.filter(function (x) { return String(x.id) === id; })[0]; }
+  $("#s-admin").addEventListener("click", function (e) {
+    var b = e.target.closest("[data-act]"); if (!b) return;
+    var a = b.dataset.act, id = b.dataset.id, x, req, E = encodeURIComponent(id);
+    if (a === "bn_rm") req = api("/api/admin/banners/" + E, "DELETE");
+    else if (a === "md_ph") { phId = id; ph.click(); return; }
+    else if (a === "u_add" || a === "u_sub") {
+      var v = prompt((a === "u_add" ? "Coins to ADD to " : "Coins to DEDUCT from ") + id), n2 = amtOf(v || "");
+      if (!n2) { if (v) toast("Enter a valid amount"); return; }
+      req = api("/api/admin/users/" + E + "/coins", "POST", { delta: a === "u_add" ? +n2 : -n2 });
+    }
+    else if (a === "delu") { if (!confirm("Remove player " + id + "?")) return; req = api("/api/admin/users/" + E, "DELETE"); }
+    else if (a === "md_rm") req = api("/api/admin/modes/" + E, "DELETE");
+    else if (a === "mt_d") { if (!confirm("Delete this match? Entry fees are refunded if it is not finished.")) return; req = api("/api/admin/matches/" + E, "DELETE"); }
+    else if (a === "mt_n") { x = byId(matches, id); var n = prompt("Match notice", x.notice || ""); if (n === null) return; req = api("/api/admin/matches/" + E, "PUT", { notice: n }); }
+    else if (a === "mt_p") {
+      x = byId(matches, id); if (x.done) { toast("Prizes already given"); return; }
+      var names = []; x.prizes.forEach(function (p, i) { names.push((prompt("Rank " + (i + 1) + " winner username (prize " + p + "). Leave blank to skip.") || "").trim()); });
+      req = api("/api/admin/matches/" + E + "/prizes", "POST", { winners: names });
+    }
+    else if (a === "dp_ok" || a === "dp_no") req = api("/api/admin/deposits/" + E + "/" + (a === "dp_ok" ? "approve" : "reject"), "POST");
+    else if (a === "wd_ok" || a === "wd_no") req = api("/api/admin/withdrawals/" + E + "/" + (a === "wd_ok" ? "approve" : "reject"), "POST");
+    else return;
+    req.then(function () { adminSync(); }).catch(function (er) { toast(er.message); });
+  });
+  $("#c-save").addEventListener("click", function () {
+    api("/api/admin/config", "PUT", { name: $("#c-name").value.trim() || "ArenaX", upi: $("#c-upi").value.trim() })
+      .then(function (d) { cfg = d.cfg; brand(); toast("Settings saved"); }).catch(function (x) { toast(x.message); });
+  });
+  $("#c-logo").addEventListener("change", function (e) { if (e.target.files[0]) pic(e.target.files[0], function (d) { api("/api/admin/config", "PUT", { logo: d }).then(function (r) { cfg = r.cfg; brand(); toast("Logo updated"); }).catch(function (x) { toast(x.message); }); }); });
+  $("#b-file").addEventListener("change", function (e) { Array.prototype.forEach.call(e.target.files, function (f) { pic(f, function (d) { api("/api/admin/banners", "POST", { img: d }).then(function () { adminSync(); }).catch(function (x) { toast(x.message); }); }); }); e.target.value = ""; });
+  $("#md-add").addEventListener("click", function () {
+    var n = $("#md-name").value.trim(), f = $("#md-img").files[0]; if (!n) { toast("Enter a mode name"); return; }
+    function add(img) { api("/api/admin/modes", "POST", { name: n, img: img || "" }).then(function () { $("#md-name").value = ""; $("#md-img").value = ""; adminSync(); }).catch(function (x) { toast(x.message); }); }
+    if (f) pic(f, add); else add("");
+  });
+  $("#m-add").addEventListener("click", function () {
+    var t = $("#m-title").value.trim(), sl = +$("#m-slots").value, fee = $("#m-fee").value, err = $("#m-err");
+    if (!t || !$("#m-mode").value || sl < 1 || fee === "" || +fee < 0) { err.textContent = "Enter mode, title, slots and entry."; return; }
+    var pz = $("#m-prz").value.split(",").map(function (v) { return +v.trim(); }).filter(function (v) { return v > 0; });
+    err.textContent = "";
+    api("/api/admin/matches", "POST", { mode: $("#m-mode").value, title: t, slots: sl, entry: +fee, when: $("#m-when").value, prizes: pz })
+      .then(function () { ["#m-title", "#m-slots", "#m-fee", "#m-when", "#m-prz"].forEach(function (i) { $(i).value = ""; }); adminSync(); toast("Match created"); })
+      .catch(function (x) { err.textContent = x.message; });
+  });
+  var hooks = { play: rPlay, matches: rMatches, board: rBoard, wallet: rWallet };
+  var _show = show; show = function (n) { _show(n); if (hooks[n]) { hooks[n](); sync(hooks[n]); } };
+  var _enter = enter; enter = function (a, b) { _enter(a, b); bal(); };
+
+  /* Admin sections: one tab per feature */
+  (function () {
+    var A = $("#s-admin"), menu = A.querySelector("ul.menu"), kids = Array.prototype.slice.call(A.children), start = kids.indexOf(A.querySelector(".stats")) + 1, end = kids.indexOf(menu);
+    var map = { "Create tournament": "legacy", "Tournaments": "legacy", "Players": "Players", "App settings": "Settings", "Banners": "Banners", "Modes": "Modes", "Create match": "Matches", "Matches": "Matches", "Deposit requests": "Deposits", "Withdraw requests": "Withdrawals" };
+    var order = ["Players", "Settings", "Banners", "Modes", "Matches", "Deposits", "Withdrawals", "Leaderboard"], cur = null;
+    kids.slice(start, end).forEach(function (n) {
+      if (n.tagName === "H2") { cur = el("div"); cur.dataset.sec = map[n.textContent]; A.insertBefore(cur, n); }
+      cur.appendChild(n);
+    });
+    var lb = el("div"); lb.dataset.sec = "Leaderboard"; lb.appendChild(el("h2", null, "Leaderboard")); lb.appendChild(el("div")); lb.lastChild.id = "a-lb"; A.insertBefore(lb, menu);
+    var bar = el("div"); bar.style.cssText = "display:flex;gap:8px;overflow-x:auto;position:sticky;top:0;background:#000;padding:10px 0;z-index:5;margin-top:10px";
+    var chips = {};
+    order.forEach(function (n) { var b = el("button", "mini", n); b.type = "button"; b.style.cssText = "flex:none;height:38px"; b.addEventListener("click", function () { pick(n); }); chips[n] = b; bar.appendChild(b); });
+    A.insertBefore(bar, A.children[kids.indexOf(A.querySelector(".stats")) + 1]);
+    function pick(n) {
+      A.querySelectorAll("[data-sec]").forEach(function (d) { d.hidden = d.dataset.sec !== n; });
+      order.forEach(function (k) { chips[k].style.background = k === n ? "var(--red)" : ""; chips[k].setAttribute("aria-pressed", k === n); });
+      A.dataset.sec = n;
+    }
+    window.admSecs = { pick: pick, chips: chips, cur: function () { return A.dataset.sec; } };
+    pick("Players");
+  })();
+  var uq = el("input", "field"); uq.id = "u-q"; uq.placeholder = "Search username, mobile or email"; uq.setAttribute("aria-label", "Search players"); uq.style.marginBottom = "12px";
+  $("#u-list").parentNode.insertBefore(uq, $("#u-list")); uq.addEventListener("input", function () { rAdm2(); });
+  var _ra2 = rAdm2; rAdm2 = function () {
+    _ra2();
+    var q = uq.value.trim().toLowerCase(), qd = q.replace(/\D/g, ""), UL = $("#u-list"), cnt = 0; UL.textContent = "";
+    users.forEach(function (u) {
+      var md = (u.mobile || "").replace(/\D/g, "");
+      if (q && !((u.username || "").toLowerCase().indexOf(q) > -1 || (u.email || "").toLowerCase().indexOf(q) > -1 || (u.name || "").toLowerCase().indexOf(q) > -1 || (qd && md.indexOf(qd) > -1))) return;
+      cnt++; item(UL, u.name + " (@" + u.username + ")", u.mobile + " · " + u.email + " · " + fmt(u.coins) + " coins", [{ label: "+ Add", act: "u_add", id: u.username }, { label: "- Deduct", act: "u_sub", id: u.username, red: 1 }, { label: "Remove", act: "delu", id: u.username, red: 1 }]);
+    });
+    if (!cnt) none(UL, users.length ? "No player matches your search." : "No players have signed up yet.");
+    var L = $("#a-lb"); if (L) { L.textContent = ""; users.slice().sort(function (a, b) { return (b.won || 0) - (a.won || 0); }).forEach(function (u, i) { item(L, "#" + (i + 1) + " " + u.username, fmt(u.won || 0) + " coins won", []); }); if (!users.length) none(L, "No players yet."); }
+    var c = admSecs.chips, pd = deps.filter(function (d) { return d.st === "pending"; }).length, pw = wds.filter(function (d) { return d.st === "pending"; }).length;
+    c.Deposits.textContent = "Deposits" + (pd ? " (" + pd + ")" : ""); c.Withdrawals.textContent = "Withdrawals" + (pw ? " (" + pw + ")" : "");
+  };
+  brand(); rPlay();
+
+})();
+</script>
+
+</body></html>
